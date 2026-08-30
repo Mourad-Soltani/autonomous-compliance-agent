@@ -38,6 +38,11 @@ This TypeScript-based platform continuously audits your cloud infrastructure and
             │   Evidence,     │
             │   Controls)     │
             └─────────────────┘
+                     ▲
+            ┌─────────────────┐
+            │  Web Dashboard  │  ← React-style UI at /dashboard
+            │  (Dark Theme)   │
+            └─────────────────┘
 ```
 
 ## Quick Start
@@ -72,13 +77,42 @@ npm run dev
 npm run dev -- --remediate
 ```
 
-### 5. Start REST API Server
+### 5. Start REST API Server + Dashboard
 
 ```bash
 npm run server
 ```
 
-The API will be available at `http://localhost:3000`.
+Then open **http://localhost:3000/dashboard** in your browser.
+
+## Dashboard
+
+The built-in web dashboard provides a visual interface for monitoring compliance without touching the CLI.
+
+### Features
+
+- **Overview Page** — Real-time compliance stats, pass rate donut chart, latest audit summary, remediation activity feed
+- **Audit Runs** — Full history with pass/fail status, sortable table
+- **Controls** — Browse all SOC 2 controls with severity badges
+- **Evidence** — View collected evidence with LIVE/MOCK mode indicators
+- **One-Click Actions** — Run audit or audit+remediate directly from the UI
+- **Auto-Refresh** — Data refreshes every 30 seconds
+
+### Screenshots
+
+```
+┌─────────────────────────────────────────────┐
+│  Compliance Agent                    [Audit] │
+├──────────┬──────────────────────────────────┤
+│ Overview │  Total    Compliant  Non-Comp  NE │
+│ Audits   │   3         2          1        0  │
+│ Controls │                                  │
+│ Evidence │  [========== 67% Pass Rate ====] │
+│          │                                  │
+│ API ●    │  Latest Audit: Aug 30, 2026      │
+│          │  2 compliant · 1 non-compliant   │
+└──────────┴──────────────────────────────────┘
+```
 
 ## Live Mode vs Mock Mode
 
@@ -118,6 +152,7 @@ Requires:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| `GET` | `/` or `/dashboard` | Web Dashboard |
 | `GET` | `/health` | Health check |
 | `POST` | `/audit` | Trigger compliance audit (detection only) |
 | `POST` | `/remediate` | Trigger audit + **auto-fix non-compliant controls** |
@@ -185,6 +220,10 @@ remediator.registerRemediation('CC6.1', async (control, evaluation) => {
 ## Project Structure
 
 ```
+├── dashboard/
+│   ├── index.html              # Dashboard HTML shell
+│   ├── styles.css              # Dark theme styles
+│   └── app.js                  # Dashboard logic & API integration
 ├── prisma/
 │   └── schema.prisma           # PostgreSQL schema
 ├── scripts/
@@ -207,7 +246,7 @@ remediator.registerRemediation('CC6.1', async (control, evaluation) => {
 │   ├── types/
 │   │   └── policy.ts               # Zod schemas & TypeScript types
 │   ├── index.ts                    # CLI entry point
-│   └── server.ts                   # REST API server
+│   └── server.ts                   # REST API + Dashboard server
 ├── .env.example
 ├── package.json
 ├── tsconfig.json
@@ -280,7 +319,8 @@ evaluator.registerRule('CC6.1', (evidence) => {
 |--------|---------|-------------|
 | Build | `npm run build` | Compile TypeScript |
 | Dev | `npm run dev` | Run CLI with tsx |
-| Server | `npm run server` | Start REST API |
+| Server | `npm run server` | Start REST API + Dashboard |
+| Dashboard | `npm run dashboard` | Show dashboard URL hint |
 | Start | `npm start` | Run compiled CLI output |
 | Bundle | `npm run bundle` | Export all source to `bundle.md` |
 | Prisma Generate | `npm run prisma:generate` | Generate Prisma client |
@@ -302,7 +342,7 @@ evaluator.registerRule('CC6.1', (evidence) => {
 - [x] Zero-dependency bundling script
 - [x] Slack / Webhook notification adapter
 - [x] REST API Endpoints for UI / External Triggering
-- [ ] Web dashboard (React/Vue)
+- [x] **Web Dashboard (Dark Theme)** ← *NEW*
 - [ ] Policy template library (50+ pre-built controls)
 - [ ] Evidence export / auditor portal
 - [ ] Additional adapters (Azure, GCP, Okta, Jira)
