@@ -2,6 +2,7 @@ import { PolicyEvaluator } from './policies/evaluator.js';
 import { AuditAgent } from './agents/audit.agent.js';
 import { AWSAdapter } from './adapters/aws.adapter.js';
 import { GitHubAdapter } from './adapters/github.adapter.js';
+import { SlackAdapter } from './adapters/slack.adapter.js';
 import { SOC2Control, Evidence } from './types/policy.js';
 import { syncControls, saveAuditReport, prisma } from './core/db.js';
 
@@ -84,14 +85,14 @@ async function main() {
   const awsAdapter = new AWSAdapter({
     adapterId: 'aws-prod-us-east-1',
     enabled: true,
-    region: 'us-east-1',
+    region: process.env.AWS_REGION || 'us-east-1',
   });
 
   const githubAdapter = new GitHubAdapter({
     adapterId: 'github-main-repo',
     enabled: true,
-    owner: 'enterprise-org',
-    repo: 'core-platform',
+    owner: process.env.GITHUB_OWNER || 'enterprise-org',
+    repo: process.env.GITHUB_REPO || 'core-platform',
   });
 
   await awsAdapter.initialize();
@@ -111,6 +112,24 @@ async function main() {
   console.log('[+] Storing run metrics to PostgreSQL...');
   const runId = await saveAuditReport(report);
   console.log(`[+] Run saved successfully. ID: ${runId}`);
+
+  // Optional: Send Slack notification
+  const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
+  if (slackWebhookUrl) {
+    try {
+      const slackAdapter = new SlackAdapter({
+        adapterId: 'slack-alerts',
+        enabled: true,
+        webhookUrl: slackWebhookUrl,
+        channel: process.env.SLACK_CHANNEL,
+        username: 'Compliance Agent',
+      });
+      await slackAdapter.sendAuditSummary(report);
+      console.log('[+] Slack notification sent.');
+    } catch (err) {
+      console.error('[-] Failed to send Slack notification:', (err as Error).message);
+    }
+  }
 }
 
 main()
