@@ -1,5 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { URL } from 'url';
+import { readFileSync, existsSync } from 'fs';
+import { join, extname } from 'path';
 import { PolicyEvaluator } from './policies/evaluator.js';
 import { PolicyRemediator } from './policies/remediator.js';
 import { AuditAgent } from './agents/audit.agent.js';
@@ -12,6 +14,7 @@ import { SOC2Control, Evidence } from './types/policy.js';
 import { syncControls, saveAuditReport, prisma } from './core/db.js';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const __dirname = new URL('.', import.meta.url).pathname;
 
 const DEFAULT_CONTROLS: SOC2Control[] = [
   {
@@ -42,6 +45,29 @@ const DEFAULT_CONTROLS: SOC2Control[] = [
     isAutomated: true,
   },
 ];
+
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.js': 'application/javascript',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+};
+
+function serveStaticFile(res: ServerResponse, filePath: string): boolean {
+  if (!existsSync(filePath)) return false;
+  try {
+    const content = readFileSync(filePath);
+    const ext = extname(filePath);
+    res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
+    res.end(content);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function json(res: ServerResponse, status: number, data: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -160,6 +186,17 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     return;
   }
 
+  // Static files — Dashboard
+  if (url.pathname === '/' || url.pathname === '/dashboard' || url.pathname === '/dashboard/') {
+    const served = serveStaticFile(res, join(__dirname, '../dashboard/index.html'));
+    if (served) return;
+  }
+  if (url.pathname.startsWith('/dashboard/')) {
+    const filePath = join(__dirname, '..', url.pathname);
+    const served = serveStaticFile(res, filePath);
+    if (served) return;
+  }
+
   try {
     // GET /health
     if (url.pathname === '/health' && req.method === 'GET') {
@@ -167,14 +204,14 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       return;
     }
 
-    // POST /audit — trigger audit (detection only)
+    // POST /audit
     if (url.pathname === '/audit' && req.method === 'POST') {
       const result = await triggerAudit(false);
       json(res, 200, result);
       return;
     }
 
-    // POST /remediate — trigger audit + auto-fix non-compliant controls
+    // POST /remediate
     if (url.pathname === '/remediate' && req.method === 'POST') {
       const result = await triggerAudit(true);
       json(res, 200, result);
@@ -271,10 +308,11 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
 server.listen(PORT, async () => {
   console.log(`[+] Compliance Agent API running on http://localhost:${PORT}`);
+  console.log(`[+] Dashboard available at http://localhost:${PORT}/dashboard`);
   console.log(`[+] Endpoints:`);
   console.log(`    GET  /health          → Health check`);
-  console.log(`    POST /audit           → Trigger compliance audit (detection only)`);
-  console.log(`    POST /remediate       → Trigger audit + auto-fix non-compliant controls`);
+  console.log(`    POST /audit           → Trigger compliance audit`);
+  console.log(`    POST /remediate       → Trigger audit + auto-fix`);
   console.log(`    GET  /audit/runs      → List audit runs`);
   console.log(`    GET  /audit/runs/:id  → Get specific audit run`);
   console.log(`    GET  /controls        → List SOC 2 controls`);
