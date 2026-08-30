@@ -1,10 +1,10 @@
 # Autonomous Compliance Agent
 
-> Autonomous AI agent for continuous SOC 2 compliance evaluation and evidence collection.
+> Autonomous AI agent for continuous SOC 2 compliance evaluation, evidence collection, and **automatic remediation**.
 
 ## Overview
 
-This TypeScript-based platform continuously audits your cloud infrastructure and code repositories against SOC 2 Trust Services Criteria, evaluates collected evidence against dynamic policy rules, and persists audit reports to PostgreSQL.
+This TypeScript-based platform continuously audits your cloud infrastructure and code repositories against SOC 2 Trust Services Criteria, evaluates collected evidence against dynamic policy rules, **automatically fixes non-compliant controls**, and persists audit reports to PostgreSQL.
 
 ## Architecture
 
@@ -23,6 +23,10 @@ This TypeScript-based platform continuously audits your cloud infrastructure and
             ┌─────────────────┐
             │ Policy Evaluator│  ← Dynamic rule engine
             └────────┬────────┘
+                     ▼
+            ┌─────────────────┐     ┌─────────────────┐
+            │ Policy Remediator│ ←── │ Auto-fix engine │
+            └────────┬────────┘     └─────────────────┘
                      ▼
             ┌─────────────────┐
             │    PostgreSQL   │  ← Prisma ORM
@@ -57,13 +61,17 @@ npx prisma db push
 ### 4. Run CLI Audit
 
 ```bash
+# Detection only
 npm run dev
+
+# Detection + automatic remediation
+npm run dev -- --remediate
 ```
 
 ### 5. Start REST API Server
 
 ```bash
-npx tsx src/server.ts
+npm run server
 ```
 
 The API will be available at `http://localhost:3000`.
@@ -73,36 +81,97 @@ The API will be available at `http://localhost:3000`.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | Health check |
-| `POST` | `/audit` | Trigger a new compliance audit |
+| `POST` | `/audit` | Trigger compliance audit (detection only) |
+| `POST` | `/remediate` | Trigger audit + **auto-fix non-compliant controls** |
 | `GET` | `/audit/runs` | List recent audit runs |
 | `GET` | `/audit/runs/:id` | Get a specific audit run |
 | `GET` | `/controls` | List all SOC 2 controls |
 | `GET` | `/controls/:id` | Get a specific control |
 | `GET` | `/evidence` | List collected evidence |
 
+## Autonomous Remediation
+
+Unlike every major competitor (Vanta, Drata, Secureframe), this agent **does not just detect** — it **fixes**.
+
+### How It Works
+
+1. **Evaluate** — Run the audit to detect non-compliant controls
+2. **Remediate** — The `PolicyRemediator` looks up registered fix functions per control ID
+3. **Execute** — AWS/GitHub APIs are called to enforce the desired state
+4. **Report** — Remediation outcomes are logged and stored alongside audit results
+
+### Supported Remediations
+
+| Control | Issue | Auto-Fix Action |
+|---------|-------|-----------------|
+| **CC6.1** | IAM MFA disabled / weak password policy | Enable root MFA; enforce 14-char password with symbols & 90-day rotation |
+| **CC7.2** | CloudTrail logging disabled | Create multi-region trail with log file validation |
+| **CC6.8** | Branch protection disabled | Enforce PR reviews (2 approvers), code owner review, CI status checks |
+
+### CLI Usage
+
+```bash
+# Detect only
+npx tsx src/index.ts
+
+# Detect + fix
+npx tsx src/index.ts --remediate
+```
+
+### API Usage
+
+```bash
+# Detection only
+curl -X POST http://localhost:3000/audit
+
+# Detection + auto-remediation
+curl -X POST http://localhost:3000/remediate
+```
+
+### Adding Custom Remediations
+
+```typescript
+import { PolicyRemediator } from './policies/remediator.js';
+
+const remediator = new PolicyRemediator();
+
+remediator.registerRemediation('CC6.1', async (control, evaluation) => {
+  // Your fix logic here
+  await enableMFA();
+  return {
+    success: true,
+    message: 'MFA enabled.',
+    actionTaken: 'Enabled MFA for root user.',
+  };
+});
+```
+
 ## Project Structure
 
 ```
 ├── prisma/
-│   └── schema.prisma       # PostgreSQL schema
+│   └── schema.prisma           # PostgreSQL schema
 ├── scripts/
-│   └── bundle.js           # Zero-dependency code bundler
+│   └── bundle.js               # Zero-dependency code bundler
 ├── src/
 │   ├── adapters/
-│   │   ├── base.adapter.ts     # Abstract adapter interface
-│   │   ├── aws.adapter.ts      # AWS Security Hub / CloudTrail
-│   │   ├── github.adapter.ts   # GitHub branch protection
-│   │   └── slack.adapter.ts    # Slack notifications
+│   │   ├── base.adapter.ts         # Abstract adapter interface
+│   │   ├── aws.adapter.ts          # AWS Security Hub / CloudTrail
+│   │   ├── aws.remediator.ts       # AWS auto-fix logic
+│   │   ├── github.adapter.ts       # GitHub branch protection
+│   │   ├── github.remediator.ts    # GitHub auto-fix logic
+│   │   └── slack.adapter.ts        # Slack notifications
 │   ├── agents/
-│   │   └── audit.agent.ts      # Audit orchestrator
+│   │   └── audit.agent.ts          # Audit orchestrator
 │   ├── core/
-│   │   └── db.ts               # Prisma database service
+│   │   └── db.ts                   # Prisma database service
 │   ├── policies/
-│   │   └── evaluator.ts        # Dynamic rule engine
+│   │   ├── evaluator.ts            # Dynamic rule engine
+│   │   └── remediator.ts           # Auto-fix engine
 │   ├── types/
-│   │   └── policy.ts           # Zod schemas & TypeScript types
-│   ├── index.ts                # CLI entry point
-│   └── server.ts               # REST API server
+│   │   └── policy.ts               # Zod schemas & TypeScript types
+│   ├── index.ts                    # CLI entry point
+│   └── server.ts                   # REST API server
 ├── .env.example
 ├── package.json
 ├── tsconfig.json
@@ -125,9 +194,19 @@ Collects evidence from:
 - **AWS Security Hub** — IAM MFA, password policies (CC6.1)
 - **AWS CloudTrail** — Audit trail logging status (CC7.2)
 
+### AWS Remediator
+Automatically fixes:
+- **IAM MFA** — Enables MFA for root user
+- **Password Policy** — Enforces strong password requirements
+- **CloudTrail** — Creates and enables multi-region audit trail
+
 ### GitHub Adapter
 Collects evidence from:
 - **Branch Protection** — Required PR reviews, status checks (CC6.8)
+
+### GitHub Remediator
+Automatically fixes:
+- **Branch Protection** — Enforces required reviews, code owner approval, CI checks
 
 ### Slack Adapter
 Sends notifications:
@@ -154,7 +233,8 @@ evaluator.registerRule('CC6.1', (evidence) => {
 |--------|---------|-------------|
 | Build | `npm run build` | Compile TypeScript |
 | Dev | `npm run dev` | Run CLI with tsx |
-| Start | `npm start` | Run compiled output |
+| Server | `npm run server` | Start REST API |
+| Start | `npm start` | Run compiled CLI output |
 | Bundle | `npm run bundle` | Export all source to `bundle.md` |
 | Prisma Generate | `npm run prisma:generate` | Generate Prisma client |
 | Prisma Push | `npm run prisma:push` | Push schema to database |
@@ -164,9 +244,10 @@ evaluator.registerRule('CC6.1', (evidence) => {
 - [x] Initial repo scaffolding & TS build settings
 - [x] Zod domain models & SOC 2 types
 - [x] Dynamic rule engine & policy evaluator
+- [x] **Autonomous remediation engine** — fixes non-compliant controls automatically
 - [x] Abstract adapter interface
-- [x] AWS CloudTrail / Security Hub adapter
-- [x] GitHub branch protection adapter
+- [x] AWS CloudTrail / Security Hub adapter + remediator
+- [x] GitHub branch protection adapter + remediator
 - [x] Autonomous agent runtime orchestrator
 - [x] PostgreSQL Prisma persistence schema
 - [x] Database service layer
@@ -174,7 +255,6 @@ evaluator.registerRule('CC6.1', (evidence) => {
 - [x] Zero-dependency bundling script
 - [x] Slack / Webhook notification adapter
 - [x] REST API Endpoints for UI / External Triggering
-- [ ] Autonomous remediation (fix misconfigurations automatically)
 - [ ] Web dashboard (React/Vue)
 - [ ] Policy template library (50+ pre-built controls)
 - [ ] Evidence export / auditor portal
