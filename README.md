@@ -1,10 +1,11 @@
 # 🤖 Autonomous Compliance Agent
 
-> Multi-cloud SOC 2 compliance automation platform with autonomous remediation, policy templates, evidence export, and an auditor-ready web portal.
+> Multi-cloud SOC 2 compliance automation platform with autonomous remediation, policy templates, evidence export, CIS benchmarks, and an auditor-ready web portal.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)](https://www.typescriptlang.org/)
 [![Prisma](https://img.shields.io/badge/Prisma-ORM-2D3748)](https://www.prisma.io/)
 [![SOC 2](https://img.shields.io/badge/SOC%202-Trust%20Service%20Categories-green)](https://www.aicpa.org/interestareas/frc/assuranceadvisoryservices/aicpasoc2report.html)
+[![CIS](https://img.shields.io/badge/CIS-Benchmarks-orange)](https://www.cisecurity.org/cis-benchmarks)
 
 ---
 
@@ -13,7 +14,9 @@
 | Feature | Status | Description |
 |---------|--------|-------------|
 | **Policy Template Library** | ✅ LIVE | 25 pre-built SOC 2 controls across all 5 Trust Service Categories |
-| **Multi-Cloud Adapters** | ✅ LIVE | AWS, Azure, GitHub (GCP coming soon) |
+| **CIS Benchmarks** | ✅ LIVE | 45 CIS controls mapped to SOC 2 (AWS, Azure, GCP) |
+| **Custom Control Builder** | ✅ LIVE | No-code UI for creating custom compliance controls |
+| **Multi-Cloud Adapters** | ✅ LIVE | AWS, Azure, GCP, GitHub |
 | **Autonomous Remediation** | ✅ LIVE | Auto-fix violations with rollback support |
 | **Evidence Export** | ✅ LIVE | CSV, JSON, Markdown, HTML auditor reports |
 | **Auditor Portal** | ✅ LIVE | Print-ready HTML dashboard for external auditors |
@@ -34,9 +37,17 @@
 │   │   ├── github.adapter.ts
 │   │   ├── github.remediator.ts
 │   │   ├── azure.adapter.ts
-│   │   └── azure.remediator.ts
+│   │   ├── azure.remediator.ts
+│   │   ├── gcp.adapter.ts
+│   │   └── gcp.remediator.ts
 │   ├── api/                # REST API routes & middleware
 │   │   ├── routes/
+│   │   │   ├── audit.routes.ts
+│   │   │   ├── control.routes.ts
+│   │   │   ├── template.routes.ts
+│   │   │   ├── export.routes.ts
+│   │   │   ├── adapter.routes.ts
+│   │   │   └── custom-control.routes.ts
 │   │   └── middleware/
 │   ├── core/               # Rule engine, evaluator, export
 │   │   ├── rule-engine.ts
@@ -44,11 +55,19 @@
 │   │   ├── remediation-engine.ts
 │   │   └── export.ts
 │   ├── dashboard/          # React web UI
+│   │   ├── pages/
+│   │   │   ├── Dashboard.tsx
+│   │   │   ├── AuditRuns.tsx
+│   │   │   ├── Controls.tsx
+│   │   │   ├── AuditorPortal.tsx
+│   │   │   └── CustomControlBuilder.tsx
+│   │   └── components/
 │   ├── db/                 # Prisma schema + service layer
 │   ├── models/             # Zod domain models
 │   ├── notifications/      # Slack & webhook adapters
-│   ├── templates/          # 25 SOC 2 control templates
+│   ├── templates/          # SOC 2 + CIS control templates
 │   │   ├── controls.ts
+│   │   ├── cis-benchmarks.ts
 │   │   └── loader.ts
 │   ├── types/              # Shared TypeScript types
 │   ├── cli/                # CLI commands
@@ -110,11 +129,20 @@ npm start          # Production
 - **CC6.1** — IAM password policy, MFA enforcement
 - **CC6.6** — S3 bucket encryption & public access blocks
 - **CC6.7** — Security group hardening
+- **CIS-AWS-1.4–5.1** — 18 CIS benchmark checks
 
 ### Azure
 - **CC6.1** — Key Vault access policies, purge protection, RBAC
 - **CC6.6** — Storage encryption (HTTPS-only, customer-managed keys, soft-delete)
 - **CC6.7** — NSG hardening (default deny inbound, SSH/RDP restriction)
+- **CIS-AZURE-1.1–7.1** — 15 CIS benchmark checks
+
+### GCP
+- **CC6.1** — IAM overly permissive bindings, audit logging
+- **CC6.6** — GCS uniform access, public access prevention, CMEK, versioning
+- **CC6.7** — Firewall rules (SSH/RDP from internet, default-allow rules)
+- **CC7.2** — Cloud KMS key management
+- **CIS-GCP-1.1–7.1** — 12 CIS benchmark checks
 
 ### GitHub
 - **CC6.1** — Branch protection rules, required reviews
@@ -143,6 +171,18 @@ npm start          # Production
 | `GET`  | `/templates` | List policy templates with stats |
 | `POST` | `/templates/seed` | Seed database from templates |
 
+### Custom Controls
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`  | `/controls/custom` | List custom controls |
+| `POST` | `/controls/custom` | Create custom control |
+| `GET`  | `/controls/custom/:id` | Get custom control |
+| `PUT`  | `/controls/custom/:id` | Update custom control |
+| `DELETE` | `/controls/custom/:id` | Delete custom control |
+| `POST` | `/controls/custom/:id/test` | Test control check |
+| `POST` | `/controls/custom/:id/activate` | Activate control |
+| `POST` | `/controls/custom/:id/deactivate` | Deactivate control |
+
 ### Adapters
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -166,7 +206,7 @@ npx tsx src/index.ts --remediate --finding-id <id>
 # Seed templates
 npx tsx src/index.ts --templates
 npx tsx src/index.ts --templates --category SECURITY
-n
+
 # Export evidence
 npx tsx src/index.ts --export --run-id <id> --format html
 
@@ -197,6 +237,7 @@ node scripts/bundle.js
 - [x] AWS SDK adapter + remediator (LIVE + MOCK)
 - [x] GitHub API adapter + remediator (LIVE + MOCK)
 - [x] Azure SDK adapter + remediator (LIVE + MOCK)
+- [x] GCP SDK adapter + remediator (LIVE + MOCK)
 - [x] Autonomous agent runtime orchestrator
 - [x] PostgreSQL Prisma persistence schema
 - [x] Database service layer
@@ -207,9 +248,10 @@ node scripts/bundle.js
 - [x] Web Dashboard (Dark Theme)
 - [x] Policy template library (25 controls)
 - [x] Evidence export / auditor portal
-- [ ] GCP adapter (next)
-- [ ] CIS Benchmarks integration
-- [ ] Custom control builder UI
+- [x] CIS Benchmarks integration (45 controls)
+- [x] Custom control builder UI
+- [ ] Kubernetes / Container adapter (future)
+- [ ] Compliance-as-Code Terraform provider (future)
 
 ---
 
@@ -217,9 +259,9 @@ node scripts/bundle.js
 
 | Metric | Value |
 |--------|-------|
-| One-time codebase sale | $30,000 – $60,000 |
-| SaaS launch price | $999 – $1,999 / month |
-| Status | Multi-cloud compliance platform with web UI, templates, and export |
+| One-time codebase sale | $40,000 – $80,000 |
+| SaaS launch price | $999 – $2,499 / month |
+| Status | Enterprise multi-cloud compliance platform with CIS benchmarks, custom controls, and full audit lifecycle |
 
 ---
 
