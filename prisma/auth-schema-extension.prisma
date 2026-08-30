@@ -1,0 +1,126 @@
+// Add these models to your existing prisma/schema.prisma
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  name          String?
+  avatar        String?
+  role          UserRole  @default(MEMBER)
+  status        UserStatus @default(ACTIVE)
+  organizationId String?
+  organization  Organization? @relation(fields: [organizationId], references: [id])
+  apiKeys       ApiKey[]
+  sessions      Session[]
+  auditLogs     AuditLog[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([email])
+  @@index([organizationId])
+}
+
+model Organization {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  plan        Plan     @default(FREE)
+  ssoConfig   SSOConfig?
+  users       User[]
+  apiKeys     ApiKey[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([slug])
+}
+
+model ApiKey {
+  id            String    @id @default(cuid())
+  name          String
+  keyHash       String    @unique
+  keyPrefix     String
+  scopes        String[]  // ["read:audit", "write:controls", "admin"]
+  userId        String?
+  user          User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String?
+  organization  Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lastUsedAt    DateTime?
+  expiresAt     DateTime?
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([keyHash])
+  @@index([organizationId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([token])
+  @@index([userId])
+}
+
+model SSOConfig {
+  id                String       @id @default(uuid())
+  organizationId    String       @unique
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  provider          SSOProvider
+  clientId          String
+  clientSecret      String
+  issuerUrl         String
+  authorizationUrl  String?
+  tokenUrl          String?
+  userInfoUrl       String?
+  scopes            String[]     @default(["openid", "profile", "email"])
+  enabled           Boolean      @default(false)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  action      String   // "audit.run", "control.create", "remediation.trigger"
+  resource    String   // "audit-run:550e8400"
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  DELETED
+}
+
+enum Plan {
+  FREE
+  STARTUP
+  BUSINESS
+  ENTERPRISE
+}
+
+enum SSOProvider {
+  OKTA
+  AZURE_AD
+  GOOGLE
+  GENERIC_OIDC
+}
