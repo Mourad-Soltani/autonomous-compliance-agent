@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aca-config
+  namespace: aca
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  EXPORT_DIR: "/app/exports"
+  LOG_LEVEL: "info"
+  MAX_SCAN_CONCURRENCY: "5"
+  AWS_REGION: "us-east-1"
+  AZURE_RESOURCE_GROUP: "compliance-rg"
+  GITHUB_OWNER: "your-org"
+  GITHUB_REPO: "your-repo"
