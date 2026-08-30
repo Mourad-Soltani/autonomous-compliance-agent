@@ -8,6 +8,7 @@ import { registerAWSRemediations } from './adapters/aws.remediator.js';
 import { registerGitHubRemediations } from './adapters/github.remediator.js';
 import { SOC2Control, Evidence } from './types/policy.js';
 import { syncControls, saveAuditReport, prisma } from './core/db.js';
+import { seedTemplates, getTemplateStats } from './templates/loader.js';
 
 const DEFAULT_CONTROLS: SOC2Control[] = [
   {
@@ -41,6 +42,34 @@ const DEFAULT_CONTROLS: SOC2Control[] = [
 
 async function main() {
   const args = process.argv.slice(2);
+
+  // Template management commands
+  if (args.includes('--templates')) {
+    console.log('[+] Loading control templates...');
+    const stats = getTemplateStats();
+    console.log(`[+] Available templates: ${stats.total} controls`);
+    console.log(`    Categories:`, stats.byCategory);
+    console.log(`    Automated: ${stats.automated} | Manual: ${stats.manual}`);
+
+    const category = process.env.TEMPLATE_CATEGORY as any;
+    const automatedOnly = args.includes('--automated-only');
+    const manualOnly = args.includes('--manual-only');
+
+    const result = await seedTemplates({
+      category: category || 'ALL',
+      automatedOnly,
+      manualOnly,
+    });
+
+    console.log(`[+] Seeded ${result.seeded} controls into database.`);
+    console.log('[+] Seeded controls:');
+    for (const c of result.controls) {
+      console.log(`    • ${c.id} — ${c.title} (${c.category})`);
+    }
+    await prisma.$disconnect();
+    return;
+  }
+
   const autoRemediate = args.includes('--remediate') || args.includes('-r');
 
   console.log('[+] Initializing Autonomous Compliance Engine...');
