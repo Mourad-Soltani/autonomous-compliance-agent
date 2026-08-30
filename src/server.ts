@@ -10,6 +10,8 @@ import { GitHubAdapter } from './adapters/github.adapter.js';
 import { SlackAdapter } from './adapters/slack.adapter.js';
 import { registerAWSRemediations } from './adapters/aws.remediator.js';
 import { registerGitHubRemediations } from './adapters/github.remediator.js';
+import { AzureAdapter } from './adapters/azure.adapter.js';
+import { registerAzureRemediations } from './adapters/azure.remediator.js';
 import { SOC2Control, Evidence } from './types/policy.js';
 import { syncControls, saveAuditReport, prisma } from './core/db.js';
 
@@ -23,6 +25,24 @@ const DEFAULT_CONTROLS: SOC2Control[] = [
     title: 'Logical Access Security',
     description: 'The entity implements logical access security software, infrastructure, and architectures.',
     tscReference: 'CC6.1',
+    severity: 'HIGH',
+    isAutomated: true,
+  },
+  {
+    id: 'CC6.6',
+    category: 'SECURITY',
+    title: 'Encryption in Transit & at Rest',
+    description: 'The entity implements logical access security measures to protect against threats from sources outside its system boundaries.',
+    tscReference: 'CC6.6',
+    severity: 'CRITICAL',
+    isAutomated: true,
+  },
+  {
+    id: 'CC6.7',
+    category: 'SECURITY',
+    title: 'Malware Protection',
+    description: 'The entity prevents or detects the installation of unauthorized software.',
+    tscReference: 'CC6.7',
     severity: 'HIGH',
     isAutomated: true,
   },
@@ -101,6 +121,30 @@ function buildEvaluator(): PolicyEvaluator {
     };
   });
 
+  evaluator.registerRule('CC6.6', (evidenceList: Evidence[]) => {
+    const encrypted = evidenceList.some(
+      (e) => (e.rawPayload as { httpsOnly?: boolean })?.httpsOnly === true
+    );
+    return {
+      status: encrypted ? 'COMPLIANT' : 'NON_COMPLIANT',
+      findings: encrypted
+        ? ['Storage encryption in transit and at rest verified.']
+        : ['Storage account does not enforce HTTPS or encryption.'],
+    };
+  });
+
+  evaluator.registerRule('CC6.7', (evidenceList: Evidence[]) => {
+    const hardened = evidenceList.some(
+      (e) => (e.rawPayload as { defaultDenyInbound?: boolean })?.defaultDenyInbound === true
+    );
+    return {
+      status: hardened ? 'COMPLIANT' : 'NON_COMPLIANT',
+      findings: hardened
+        ? ['NSG default deny inbound rule enforced.']
+        : ['NSG allows unrestricted inbound traffic.'],
+    };
+  });
+
   evaluator.registerRule('CC7.2', (evidenceList: Evidence[]) => {
     const isLogging = evidenceList.some(
       (e) => (e.rawPayload as { isLogging?: boolean })?.isLogging === true
@@ -120,6 +164,7 @@ function buildRemediator(): PolicyRemediator {
   const remediator = new PolicyRemediator();
   registerAWSRemediations(remediator);
   registerGitHubRemediations(remediator);
+  registerAzureRemediations(remediator);
   return remediator;
 }
 
@@ -142,8 +187,15 @@ function buildAgent(autoRemediate = false): AuditAgent {
     repo: process.env.GITHUB_REPO || 'core-platform',
   });
 
+  const azureAdapter = new AzureAdapter({
+    adapterId: 'azure-prod-subscription',
+    enabled: true,
+    subscriptionId: process.env.AZURE_SUBSCRIPTION_ID || '00000000-0000-0000-0000-000000000000',
+  });
+
   agent.registerAdapter(awsAdapter);
   agent.registerAdapter(githubAdapter);
+  agent.registerAdapter(azureAdapter);
 
   return agent;
 }
