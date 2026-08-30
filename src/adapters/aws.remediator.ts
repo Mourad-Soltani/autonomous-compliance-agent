@@ -1,9 +1,6 @@
 import {
   IAMClient,
   UpdateAccountPasswordPolicyCommand,
-  CreateVirtualMFADeviceCommand,
-  EnableMFADeviceCommand,
-  ListVirtualMFADevicesCommand,
   ListUsersCommand,
 } from '@aws-sdk/client-iam';
 import {
@@ -12,6 +9,12 @@ import {
   StartLoggingCommand,
   PutEventSelectorsCommand,
 } from '@aws-sdk/client-cloudtrail';
+import {
+  S3Client,
+  CreateBucketCommand,
+  PutBucketPolicyCommand,
+  HeadBucketCommand,
+} from '@aws-sdk/client-s3';
 import { RemediationFunction, RemediationOutcome } from '../policies/remediator.js';
 import { SOC2Control, EvaluationResult } from '../types/policy.js';
 
@@ -30,8 +33,61 @@ function createAWSClients(region: string) {
   return {
     iam: new IAMClient(clientConfig),
     cloudTrail: new CloudTrailClient(clientConfig),
+    s3: new S3Client(clientConfig),
     hasCredentials,
   };
+}
+
+/**
+ * Ensure the CloudTrail S3 bucket exists with the required policy.
+ * Returns the bucket name.
+ */
+async function ensureCloudTrailBucket(
+  s3: S3Client,
+  bucketName: string,
+  accountId: string
+): Promise<string> {
+  try {
+    await s3.send(new HeadBucketCommand({ Bucket: bucketName }));
+    return bucketName;
+  } catch {
+    // Bucket doesn't exist — create it
+    await s3.send(new CreateBucketCommand({ Bucket: bucketName }));
+
+    const bucketPolicy = {
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Sid: 'AWSCloudTrailAclCheck20150319',
+          Effect: 'Allow',
+          Principal: { Service: 'cloudtrail.amazonaws.com' },
+          Action: 's3:GetBucketAcl',
+          Resource: `arn:aws:s3:::${bucketName}`,
+        },
+        {
+          Sid: 'AWSCloudTrailWrite20150319',
+          Effect: 'Allow',
+          Principal: { Service: 'cloudtrail.amazonaws.com' },
+          Action: 's3:PutObject',
+          Resource: `arn:aws:s3:::${bucketName}/AWSLogs/${accountId}/*`,
+          Condition: {
+            StringEquals: {
+              's3:x-amz-acl': 'bucket-owner-full-control',
+            },
+          },
+        },
+      ],
+    };
+
+    await s3.send(
+      new PutBucketPolicyCommand({
+        Bucket: bucketName,
+        Policy: JSON.stringify(bucketPolicy),
+      })
+    );
+
+    return bucketName;
+  }
 }
 
 export const awsRemediations: Record<string, RemediationFunction> = {
@@ -53,7 +109,6 @@ export const awsRemediations: Record<string, RemediationFunction> = {
     try {
       console.log('[REMEDIATE] CC6.1 — Enforcing IAM password policy...');
 
-      // 1. Enforce strong password policy
       await iam.send(
         new UpdateAccountPasswordPolicyCommand({
           MinimumPasswordLength: 14,
@@ -67,14 +122,11 @@ export const awsRemediations: Record<string, RemediationFunction> = {
         })
       );
 
-      // 2. Check if root MFA is enabled
       const users = await iam.send(new ListUsersCommand({}));
       const rootUser = users.Users?.find((u) => u.UserName === 'root') || users.Users?.[0];
 
       let mfaAction = 'Root MFA already enabled.';
       if (rootUser && !rootUser.PasswordLastUsed) {
-        // For root user, we can't programmatically enable MFA without
-        // console access. We log a warning instead.
         mfaAction = 'Root MFA must be enabled via AWS Console. Please navigate to IAM > MFA and activate a virtual/hardware MFA device.';
       }
 
@@ -98,7 +150,7 @@ export const awsRemediations: Record<string, RemediationFunction> = {
     _control: SOC2Control,
     evaluation: EvaluationResult
   ): Promise<RemediationOutcome> => {
-    const { cloudTrail, hasCredentials } = createAWSClients(process.env.AWS_REGION || 'us-east-1');
+    const { cloudTrail, s3, hasCredentials } = createAWSClients(process.env.AWS_REGION || 'us-east-1');
 
     if (!hasCredentials) {
       console.log('[REMEDIATE] CC7.2 — MOCK mode: Simulating CloudTrail creation...');
@@ -113,25 +165,26 @@ export const awsRemediations: Record<string, RemediationFunction> = {
       console.log('[REMEDIATE] CC7.2 — Creating CloudTrail multi-region trail...');
 
       const trailName = 'compliance-audit-trail';
-      const s3BucketName = process.env.AWS_CLOUDTRAIL_BUCKET || `cloudtrail-logs-${Date.now()}`;
+      const bucketName = process.env.AWS_CLOUDTRAIL_BUCKET || `cloudtrail-logs-${Date.now()}`;
+      const accountId = process.env.AWS_ACCOUNT_ID || '000000000000';
 
-      // Create the trail
+      // FIX: Ensure S3 bucket exists with proper CloudTrail policy before creating trail
+      await ensureCloudTrailBucket(s3, bucketName, accountId);
+
       const trail = await cloudTrail.send(
         new CreateTrailCommand({
           Name: trailName,
-          S3BucketName: s3BucketName,
+          S3BucketName: bucketName,
           IsMultiRegionTrail: true,
           EnableLogFileValidation: true,
           IncludeGlobalServiceEvents: true,
         })
       );
 
-      // Start logging
       await cloudTrail.send(
         new StartLoggingCommand({ Name: trailName })
       );
 
-      // Configure event selectors for all management events
       await cloudTrail.send(
         new PutEventSelectorsCommand({
           TrailName: trailName,
@@ -148,11 +201,10 @@ export const awsRemediations: Record<string, RemediationFunction> = {
       return {
         success: true,
         message: `CloudTrail trail "${trailName}" created and logging enabled.`,
-        actionTaken: `Created multi-region trail "${trailName}" in S3 bucket "${s3BucketName}"; enabled log file validation; capturing all management events.`,
+        actionTaken: `Created multi-region trail "${trailName}" in S3 bucket "${bucketName}"; enabled log file validation; capturing all management events.`,
       };
     } catch (err) {
       const error = err as Error;
-      // Trail may already exist
       if (error.name === 'TrailAlreadyExistsException') {
         try {
           await cloudTrail.send(

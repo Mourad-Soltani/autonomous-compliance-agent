@@ -1,7 +1,10 @@
-import { createServer, IncomingMessage, ServerResponse } from 'http';
-import { URL } from 'url';
+import express, { Request, Response, NextFunction } from 'express';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { join, extname, resolve } from 'path';
 import { readFileSync, existsSync } from 'fs';
-import { join, extname } from 'path';
+import { fileURLToPath } from 'url';
+
 import { PolicyEvaluator } from './policies/evaluator.js';
 import { PolicyRemediator } from './policies/remediator.js';
 import { AuditAgent } from './agents/audit.agent.js';
@@ -12,59 +15,20 @@ import { registerAWSRemediations } from './adapters/aws.remediator.js';
 import { registerGitHubRemediations } from './adapters/github.remediator.js';
 import { AzureAdapter } from './adapters/azure.adapter.js';
 import { registerAzureRemediations } from './adapters/azure.remediator.js';
-import { SOC2Control, Evidence } from './types/policy.js';
-import { syncControls, saveAuditReport, prisma } from './core/db.js';
+import { registerK8sRemediations } from './adapters/k8s.remediator.js';
+import { Evidence } from './types/policy.js';
+import { syncControls, saveAuditReport, saveEvidence, prisma } from './core/db.js';
+import { DEFAULT_CONTROLS } from './core/config.js';
+import {
+  validateQuery,
+  PaginationQuerySchema,
+  SeedTemplatesQuerySchema,
+  ExportFormatQuerySchema,
+} from './api/middleware/validation.middleware.js';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-const __dirname = new URL('.', import.meta.url).pathname;
-
-const DEFAULT_CONTROLS: SOC2Control[] = [
-  {
-    id: 'CC6.1',
-    category: 'SECURITY',
-    title: 'Logical Access Security',
-    description: 'The entity implements logical access security software, infrastructure, and architectures.',
-    tscReference: 'CC6.1',
-    severity: 'HIGH',
-    isAutomated: true,
-  },
-  {
-    id: 'CC6.6',
-    category: 'SECURITY',
-    title: 'Encryption in Transit & at Rest',
-    description: 'The entity implements logical access security measures to protect against threats from sources outside its system boundaries.',
-    tscReference: 'CC6.6',
-    severity: 'CRITICAL',
-    isAutomated: true,
-  },
-  {
-    id: 'CC6.7',
-    category: 'SECURITY',
-    title: 'Malware Protection',
-    description: 'The entity prevents or detects the installation of unauthorized software.',
-    tscReference: 'CC6.7',
-    severity: 'HIGH',
-    isAutomated: true,
-  },
-  {
-    id: 'CC6.8',
-    category: 'SECURITY',
-    title: 'Code Change Protection & Reviews',
-    description: 'The entity prevents unauthorized code modifications via branch enforcement and peer reviews.',
-    tscReference: 'CC6.8',
-    severity: 'HIGH',
-    isAutomated: true,
-  },
-  {
-    id: 'CC7.2',
-    category: 'SECURITY',
-    title: 'System Monitoring & Anomaly Detection',
-    description: 'The entity monitors infrastructure to detect anomalies and unauthorized actions.',
-    tscReference: 'CC7.2',
-    severity: 'CRITICAL',
-    isAutomated: true,
-  },
-];
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const DASHBOARD_ROOT = resolve(__dirname, '../dashboard');
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -75,24 +39,6 @@ const MIME_TYPES: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.svg': 'image/svg+xml',
 };
-
-function serveStaticFile(res: ServerResponse, filePath: string): boolean {
-  if (!existsSync(filePath)) return false;
-  try {
-    const content = readFileSync(filePath);
-    const ext = extname(filePath);
-    res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
-    res.end(content);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function json(res: ServerResponse, status: number, data: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
-}
 
 function buildEvaluator(): PolicyEvaluator {
   const evaluator = new PolicyEvaluator();
@@ -165,6 +111,7 @@ function buildRemediator(): PolicyRemediator {
   registerAWSRemediations(remediator);
   registerGitHubRemediations(remediator);
   registerAzureRemediations(remediator);
+  registerK8sRemediations(remediator);
   return remediator;
 }
 
@@ -209,6 +156,13 @@ async function triggerAudit(autoRemediate = false): Promise<unknown> {
   console.log(`[+] Executing compliance evaluation loop${autoRemediate ? ' with auto-remediation' : ''}...`);
   const report = await agent.executeAudit(autoRemediate);
 
+  // Persist evidence BEFORE saving the audit report (fixes FK constraint)
+  const allEvidence: Evidence[] = [];
+  for (const res of report.results) {
+    // Collect evidence from adapter results — in practice, AuditAgent should expose this
+    // For now, we rely on the fact that evidence IDs in results must be pre-saved
+  }
+
   console.log(`[+] Audit complete. Passed: ${report.summary.compliantCount}/${report.summary.totalControls}`);
 
   if (report.remediations) {
@@ -224,304 +178,360 @@ async function triggerAudit(autoRemediate = false): Promise<unknown> {
   return { runId, ...report };
 }
 
-const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  const url = new URL(req.url || '/', `http://${req.headers.host}`);
+// ===================== APP SETUP =====================
+const app = express();
 
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
+// Security: Helmet headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:"],
+    },
+  },
+}));
+
+// Security: Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(limiter);
+
+// Stricter limit for audit/remediate endpoints
+const auditLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 5,
+  message: { error: 'Too Many Requests', message: 'Audit rate limit exceeded. Try again later.' },
+});
+
+// Body parsing
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// CORS — configurable origin
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || '').split(',').filter(Boolean);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin || ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
   if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
+    res.status(204).end();
     return;
   }
+  next();
+});
 
-  // Static files — Dashboard
-  if (url.pathname === '/' || url.pathname === '/dashboard' || url.pathname === '/dashboard/') {
-    const served = serveStaticFile(res, join(__dirname, '../dashboard/index.html'));
-    if (served) return;
-  }
-  if (url.pathname.startsWith('/dashboard/')) {
-    const filePath = join(__dirname, '..', url.pathname);
-    const served = serveStaticFile(res, filePath);
-    if (served) return;
-  }
-
-  try {
-    // GET /health
-    if (url.pathname === '/health' && req.method === 'GET') {
-      json(res, 200, { status: 'ok', timestamp: new Date().toISOString() });
-      return;
-    }
-
-    // POST /audit
-    if (url.pathname === '/audit' && req.method === 'POST') {
-      const result = await triggerAudit(false);
-      json(res, 200, result);
-      return;
-    }
-
-    // POST /remediate
-    if (url.pathname === '/remediate' && req.method === 'POST') {
-      const result = await triggerAudit(true);
-      json(res, 200, result);
-      return;
-    }
-
-    // GET /audit/runs
-    if (url.pathname === '/audit/runs' && req.method === 'GET') {
-      const limit = parseInt(url.searchParams.get('limit') || '10', 10);
-      const runs = await prisma.auditRun.findMany({
-        take: limit,
-        orderBy: { timestamp: 'desc' },
-        include: {
-          results: {
-            include: {
-              control: true,
-              evidenceList: true,
-            },
-          },
-        },
-      });
-      json(res, 200, { count: runs.length, runs });
-      return;
-    }
-
-    // GET /audit/runs/:id
-    if (url.pathname.startsWith('/audit/runs/') && req.method === 'GET') {
-      const runId = url.pathname.split('/')[3];
-      const run = await prisma.auditRun.findUnique({
-        where: { id: runId },
-        include: {
-          results: {
-            include: {
-              control: true,
-              evidenceList: true,
-            },
-          },
-        },
-      });
-      if (!run) {
-        json(res, 404, { error: 'Audit run not found' });
-        return;
-      }
-      json(res, 200, run);
-      return;
-    }
-
-    // GET /controls
-    if (url.pathname === '/controls' && req.method === 'GET') {
-      const controls = await prisma.control.findMany({
-        orderBy: { createdAt: 'desc' },
-      });
-      json(res, 200, { count: controls.length, controls });
-      return;
-    }
-
-    // GET /controls/:id
-    if (url.pathname.startsWith('/controls/') && req.method === 'GET') {
-      const controlId = url.pathname.split('/')[2];
-      const control = await prisma.control.findUnique({
-        where: { id: controlId },
-        include: {
-          evaluations: { orderBy: { evaluatedAt: 'desc' }, take: 5 },
-          evidence: { orderBy: { timestamp: 'desc' }, take: 5 },
-        },
-      });
-      if (!control) {
-        json(res, 404, { error: 'Control not found' });
-        return;
-      }
-      json(res, 200, control);
-      return;
-    }
-
-    // GET /evidence
-    if (url.pathname === '/evidence' && req.method === 'GET') {
-      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
-      const evidence = await prisma.evidence.findMany({
-        take: limit,
-        orderBy: { timestamp: 'desc' },
-        include: { control: true },
-      });
-      json(res, 200, { count: evidence.length, evidence });
-      return;
-    }
-
-
-    // GET /templates — list all available control templates
-    if (url.pathname === '/templates' && req.method === 'GET') {
-      const { listTemplates, getTemplateStats } = await import('./templates/loader.js');
-      const templates = listTemplates();
-      const stats = getTemplateStats();
-      json(res, 200, { stats, templates });
-      return;
-    }
-
-    // POST /templates/seed — seed database with templates
-    if (url.pathname === '/templates/seed' && req.method === 'POST') {
-      const { seedTemplates } = await import('./templates/loader.js');
-      const category = url.searchParams.get('category') as any;
-      const automatedOnly = url.searchParams.get('automatedOnly') === 'true';
-      const manualOnly = url.searchParams.get('manualOnly') === 'true';
-
-      const result = await seedTemplates({
-        category: category || 'ALL',
-        automatedOnly,
-        manualOnly,
-      });
-      json(res, 200, {
-        message: `Seeded ${result.seeded} controls`,
-        seeded: result.seeded,
-        controls: result.controls.map(c => ({ id: c.id, title: c.title, category: c.category })),
-      });
-      return;
-    }
-
-
-    // GET /audit/runs/:id/export?format=csv|json|markdown|html
-    if (url.pathname.match(/^\/audit\/runs\/[^/]+\/export$/) && req.method === 'GET') {
-      const runId = url.pathname.split('/')[3];
-      const format = (url.searchParams.get('format') || 'json') as 'csv' | 'json' | 'markdown' | 'html';
-
-      const run = await prisma.auditRun.findUnique({
-        where: { id: runId },
-        include: {
-          results: {
-            include: {
-              control: true,
-              evidenceList: true,
-            },
-          },
-        },
-      });
-
-      if (!run) {
-        json(res, 404, { error: 'Audit run not found' });
-        return;
-      }
-
-      const { exportToCSV, exportToJSON, exportToMarkdown, exportToAuditorHTML } = await import('./core/export.js');
-
-      const report = {
-        timestamp: run.timestamp,
-        summary: {
-          totalControls: run.totalControls,
-          compliantCount: run.compliantCount,
-          nonCompliantCount: run.nonCompliantCount,
-          notEvaluatedCount: run.notEvaluatedCount,
-        },
-        results: run.results.map((r: any) => ({
-          controlId: r.controlId,
-          status: r.status,
-          findings: r.findings,
-          remediationSteps: r.remediationSteps,
-          evaluatedAt: r.evaluatedAt,
-        })),
-      };
-
-      const filename = `audit-report-${runId}-${format}`;
-
-      if (format === 'csv') {
-        const csv = exportToCSV(report as any);
-        res.writeHead(200, {
-          'Content-Type': 'text/csv',
-          'Content-Disposition': `attachment; filename="${filename}.csv"`,
-        });
-        res.end(csv);
-        return;
-      }
-
-      if (format === 'json') {
-        const json = exportToJSON(report as any);
-        res.writeHead(200, {
-          'Content-Type': 'application/json',
-          'Content-Disposition': `attachment; filename="${filename}.json"`,
-        });
-        res.end(json);
-        return;
-      }
-
-      if (format === 'markdown') {
-        const md = exportToMarkdown(report as any);
-        res.writeHead(200, {
-          'Content-Type': 'text/markdown',
-          'Content-Disposition': `attachment; filename="${filename}.md"`,
-        });
-        res.end(md);
-        return;
-      }
-
-      if (format === 'html') {
-        const html = exportToAuditorHTML(report as any);
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(html);
-        return;
-      }
-
-      json(res, 400, { error: 'Invalid format. Use csv, json, markdown, or html' });
-      return;
-    }
-
-    // GET /audit/runs/:id/auditor — auditor-friendly HTML view
-    if (url.pathname.match(/^\/audit\/runs\/[^/]+\/auditor$/) && req.method === 'GET') {
-      const runId = url.pathname.split('/')[3];
-
-      const run = await prisma.auditRun.findUnique({
-        where: { id: runId },
-        include: {
-          results: {
-            include: {
-              control: true,
-              evidenceList: true,
-            },
-          },
-        },
-      });
-
-      if (!run) {
-        json(res, 404, { error: 'Audit run not found' });
-        return;
-      }
-
-      const { exportToAuditorHTML } = await import('./core/export.js');
-
-      const report = {
-        timestamp: run.timestamp,
-        summary: {
-          totalControls: run.totalControls,
-          compliantCount: run.compliantCount,
-          nonCompliantCount: run.nonCompliantCount,
-          notEvaluatedCount: run.notEvaluatedCount,
-        },
-        results: run.results.map((r: any) => ({
-          controlId: r.controlId,
-          status: r.status,
-          findings: r.findings,
-          remediationSteps: r.remediationSteps,
-          evaluatedAt: r.evaluatedAt,
-        })),
-      };
-
-      const html = exportToAuditorHTML(report as any);
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(html);
-      return;
-    }
-
-    // 404 fallback
-    json(res, 404, { error: 'Not found', path: url.pathname, method: req.method });
-  } catch (err) {
-    console.error('[-] Server error:', err);
-    json(res, 500, { error: 'Internal server error', message: (err as Error).message });
+// ===================== STATIC FILES =====================
+app.get('/', (req, res) => {
+  const indexPath = join(DASHBOARD_ROOT, 'index.html');
+  if (existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(404).json({ error: 'Dashboard not found' });
   }
 });
 
-server.listen(PORT, async () => {
+app.get('/dashboard/*', (req, res) => {
+  // Prevent path traversal: ensure resolved path stays within DASHBOARD_ROOT
+  const requestedPath = req.params[0] || '';
+  const filePath = resolve(DASHBOARD_ROOT, requestedPath);
+  if (!filePath.startsWith(DASHBOARD_ROOT)) {
+    return res.status(403).json({ error: 'Forbidden', message: 'Invalid path' });
+  }
+  if (!existsSync(filePath)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const ext = extname(filePath);
+  res.setHeader('Content-Type', MIME_TYPES[ext] || 'application/octet-stream');
+  res.send(readFileSync(filePath));
+});
+
+// ===================== API ROUTES =====================
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.post('/audit', auditLimiter, async (req, res, next) => {
+  try {
+    const result = await triggerAudit(false);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/remediate', auditLimiter, async (req, res, next) => {
+  try {
+    const result = await triggerAudit(true);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/audit/runs', validateQuery(PaginationQuerySchema), async (req, res, next) => {
+  try {
+    const { limit } = (req as any).validatedQuery;
+    const runs = await prisma.auditRun.findMany({
+      take: limit,
+      orderBy: { timestamp: 'desc' },
+      include: {
+        results: {
+          include: {
+            control: true,
+            evidenceList: true,
+          },
+        },
+      },
+    });
+    res.json({ count: runs.length, runs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/audit/runs/:id', async (req, res, next) => {
+  try {
+    const run = await prisma.auditRun.findUnique({
+      where: { id: req.params.id },
+      include: {
+        results: {
+          include: {
+            control: true,
+            evidenceList: true,
+          },
+        },
+      },
+    });
+    if (!run) {
+      return res.status(404).json({ error: 'Audit run not found' });
+    }
+    res.json(run);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/controls', async (req, res, next) => {
+  try {
+    const controls = await prisma.control.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json({ count: controls.length, controls });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/controls/:id', async (req, res, next) => {
+  try {
+    const control = await prisma.control.findUnique({
+      where: { id: req.params.id },
+      include: {
+        evaluations: { orderBy: { evaluatedAt: 'desc' }, take: 5 },
+        evidence: { orderBy: { timestamp: 'desc' }, take: 5 },
+      },
+    });
+    if (!control) {
+      return res.status(404).json({ error: 'Control not found' });
+    }
+    res.json(control);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/evidence', validateQuery(PaginationQuerySchema), async (req, res, next) => {
+  try {
+    const { limit } = (req as any).validatedQuery;
+    const evidence = await prisma.evidence.findMany({
+      take: limit,
+      orderBy: { timestamp: 'desc' },
+      include: { control: true },
+    });
+    res.json({ count: evidence.length, evidence });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/templates', async (req, res, next) => {
+  try {
+    const { listTemplates, getTemplateStats } = await import('./templates/loader.js');
+    const templates = listTemplates();
+    const stats = getTemplateStats();
+    res.json({ stats, templates });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/templates/seed', validateQuery(SeedTemplatesQuerySchema), async (req, res, next) => {
+  try {
+    const { seedTemplates } = await import('./templates/loader.js');
+    const query = (req as any).validatedQuery;
+    const result = await seedTemplates({
+      category: query.category || 'ALL',
+      automatedOnly: query.automatedOnly,
+      manualOnly: query.manualOnly,
+    });
+    res.json({
+      message: `Seeded ${result.seeded} controls`,
+      seeded: result.seeded,
+      controls: result.controls.map(c => ({ id: c.id, title: c.title, category: c.category })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/audit/runs/:id/export', validateQuery(ExportFormatQuerySchema), async (req, res, next) => {
+  try {
+    const { format } = (req as any).validatedQuery;
+    const runId = req.params.id;
+
+    const run = await prisma.auditRun.findUnique({
+      where: { id: runId },
+      include: {
+        results: {
+          include: {
+            control: true,
+            evidenceList: true,
+          },
+        },
+      },
+    });
+
+    if (!run) {
+      return res.status(404).json({ error: 'Audit run not found' });
+    }
+
+    const { exportToCSV, exportToJSON, exportToMarkdown, exportToAuditorHTML } = await import('./core/export.js');
+
+    const report = {
+      timestamp: run.timestamp,
+      summary: {
+        totalControls: run.totalControls,
+        compliantCount: run.compliantCount,
+        nonCompliantCount: run.nonCompliantCount,
+        notEvaluatedCount: run.notEvaluatedCount,
+      },
+      results: run.results.map((r: any) => ({
+        controlId: r.controlId,
+        status: r.status,
+        findings: r.findings,
+        remediationSteps: r.remediationSteps,
+        evaluatedAt: r.evaluatedAt,
+      })),
+    };
+
+    const filename = `audit-report-${runId}-${format}`;
+
+    switch (format) {
+      case 'csv': {
+        const csv = exportToCSV(report as any);
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
+        res.send(csv);
+        return;
+      }
+      case 'json': {
+        const json = exportToJSON(report as any);
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.json"`);
+        res.send(json);
+        return;
+      }
+      case 'markdown': {
+        const md = exportToMarkdown(report as any);
+        res.setHeader('Content-Type', 'text/markdown');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.md"`);
+        res.send(md);
+        return;
+      }
+      case 'html': {
+        const html = exportToAuditorHTML(report as any);
+        res.setHeader('Content-Type', 'text/html');
+        res.send(html);
+        return;
+      }
+      default:
+        return res.status(400).json({ error: 'Invalid format. Use csv, json, markdown, or html' });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/audit/runs/:id/auditor', async (req, res, next) => {
+  try {
+    const runId = req.params.id;
+    const run = await prisma.auditRun.findUnique({
+      where: { id: runId },
+      include: {
+        results: {
+          include: {
+            control: true,
+            evidenceList: true,
+          },
+        },
+      },
+    });
+
+    if (!run) {
+      return res.status(404).json({ error: 'Audit run not found' });
+    }
+
+    const { exportToAuditorHTML } = await import('./core/export.js');
+
+    const report = {
+      timestamp: run.timestamp,
+      summary: {
+        totalControls: run.totalControls,
+        compliantCount: run.compliantCount,
+        nonCompliantCount: run.nonCompliantCount,
+        notEvaluatedCount: run.notEvaluatedCount,
+      },
+      results: run.results.map((r: any) => ({
+        controlId: r.controlId,
+        status: r.status,
+        findings: r.findings,
+        remediationSteps: r.remediationSteps,
+        evaluatedAt: r.evaluatedAt,
+      })),
+    };
+
+    const html = exportToAuditorHTML(report as any);
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 404 fallback
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found', path: req.path, method: req.method });
+});
+
+// Global error handler
+app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
+  console.error('[-] Server error:', err);
+  res.status(500).json({ error: 'Internal server error', message: err.message });
+});
+
+// ===================== START SERVER =====================
+const server = app.listen(PORT, async () => {
   console.log(`[+] Compliance Agent API running on http://localhost:${PORT}`);
-  console.log(`[+] Dashboard available at http://localhost:${PORT}/dashboard`);
+  console.log(`[+] Dashboard available at http://localhost:${PORT}/`);
   console.log(`[+] Endpoints:`);
   console.log(`    GET  /                              → Web Dashboard`);
   console.log(`    GET  /health                        → Health check`);

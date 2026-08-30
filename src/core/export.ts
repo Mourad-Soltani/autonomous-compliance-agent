@@ -1,11 +1,13 @@
 import { AuditReport } from '../agents/audit.agent.js';
+import { escapeHtml, sanitizeHtmlArray } from '../utils/sanitize.js';
+import { toCsv } from '../utils/csv.js';
 
 export interface ExportFormat {
   format: 'csv' | 'json' | 'markdown';
 }
 
 /**
- * Export audit report as CSV.
+ * Export audit report as CSV (RFC 4180 compliant).
  */
 export function exportToCSV(report: AuditReport): string {
   const headers = [
@@ -24,7 +26,7 @@ export function exportToCSV(report: AuditReport): string {
     r.evaluatedAt.toISOString(),
   ]);
 
-  return [headers.join(','), ...rows.map((row) => row.map((cell) => `"${cell}"`).join(','))].join('\n');
+  return toCsv([headers, ...rows]);
 }
 
 /**
@@ -82,7 +84,7 @@ export function exportToMarkdown(report: AuditReport): string {
 }
 
 /**
- * Generate an auditor-friendly HTML report.
+ * Generate an auditor-friendly HTML report (XSS-safe).
  */
 export function exportToAuditorHTML(report: AuditReport): string {
   const passRate = Math.round((report.summary.compliantCount / report.summary.totalControls) * 100);
@@ -92,11 +94,11 @@ export function exportToAuditorHTML(report: AuditReport): string {
     const statusClass = r.status === 'COMPLIANT' ? 'compliant' : r.status === 'NON_COMPLIANT' ? 'non-compliant' : 'not-evaluated';
     return `
       <tr class="${statusClass}">
-        <td><strong>${r.controlId}</strong></td>
-        <td><span class="status-badge ${statusClass}">${r.status}</span></td>
-        <td>${(r.findings || []).join('<br>')}</td>
-        <td>${(r.remediationSteps || []).join('<br>') || '—'}</td>
-        <td>${new Date(r.evaluatedAt).toLocaleString()}</td>
+        <td><strong>${escapeHtml(r.controlId)}</strong></td>
+        <td><span class="status-badge ${statusClass}">${escapeHtml(r.status)}</span></td>
+        <td>${sanitizeHtmlArray(r.findings || [])}</td>
+        <td>${sanitizeHtmlArray(r.remediationSteps || [])}</td>
+        <td>${escapeHtml(new Date(r.evaluatedAt).toLocaleString())}</td>
       </tr>
     `;
   }).join('');
@@ -109,10 +111,10 @@ export function exportToAuditorHTML(report: AuditReport): string {
             <div class="remediation-card ${outcome.success ? 'success' : 'failed'}">
               <div class="remediation-header">
                 <span class="remediation-icon">${outcome.success ? '✅' : '❌'}</span>
-                <strong>${controlId}</strong>
+                <strong>${escapeHtml(controlId)}</strong>
               </div>
-              <p>${outcome.message}</p>
-              <p class="remediation-action">${outcome.actionTaken}</p>
+              <p>${escapeHtml(outcome.message)}</p>
+              <p class="remediation-action">${escapeHtml(outcome.actionTaken)}</p>
             </div>
           `).join('')}
         </div>
@@ -123,7 +125,7 @@ export function exportToAuditorHTML(report: AuditReport): string {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>SOC 2 Audit Report — ${report.timestamp.toISOString().split('T')[0]}</title>
+  <title>SOC 2 Audit Report — ${escapeHtml(report.timestamp.toISOString().split('T')[0])}</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -238,7 +240,7 @@ export function exportToAuditorHTML(report: AuditReport): string {
   <div class="container">
     <div class="header">
       <h1>🔒 SOC 2 Compliance Audit Report</h1>
-      <div class="header-meta">Generated on ${report.timestamp.toLocaleString()} by Autonomous Compliance Agent</div>
+      <div class="header-meta">Generated on ${escapeHtml(report.timestamp.toLocaleString())} by Autonomous Compliance Agent</div>
       <div class="score-card">
         <div>
           <div class="score-value">${passRate}%</div>
@@ -285,7 +287,7 @@ export function exportToAuditorHTML(report: AuditReport): string {
     ${remediationSection}
 
     <div class="footer">
-      <p>Autonomous Compliance Agent v1.0.0 — Confidential Audit Report</p>
+      <p>Autonomous Compliance Agent v1.0.1 — Confidential Audit Report</p>
       <p>This report is intended for authorized auditors and compliance personnel only.</p>
     </div>
   </div>

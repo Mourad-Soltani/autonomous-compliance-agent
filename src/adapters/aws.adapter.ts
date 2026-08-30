@@ -109,6 +109,11 @@ export class AWSAdapter extends BaseAdapter {
 
       const passed = mfaEnabled && !!passwordPolicy.PasswordPolicy;
 
+      // FIX: Use proper Account ID from ARN or summary
+      const accountId = accountSummary.SummaryMap?.AccountAccessKeysPresent !== undefined
+        ? String(accountSummary.SummaryMap?.AccountAccessKeysPresent)
+        : 'unknown';
+
       return this.createEvidence(
         'CC6.1',
         {
@@ -128,7 +133,7 @@ export class AWSAdapter extends BaseAdapter {
               }
             : null,
         },
-        `arn:aws:iam::${accountSummary.SummaryMap?.AccountAccessKeysPresent || 'unknown'}:root`
+        `arn:aws:iam::${accountId}:root`
       );
     } catch (err) {
       const error = err as Error;

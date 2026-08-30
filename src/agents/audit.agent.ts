@@ -2,6 +2,7 @@ import { BaseAdapter } from '../adapters/base.adapter.js';
 import { PolicyEvaluator } from '../policies/evaluator.js';
 import { PolicyRemediator, RemediationOutcome } from '../policies/remediator.js';
 import { SOC2Control, EvaluationResult, Evidence } from '../types/policy.js';
+import { saveEvidence } from '../core/db.js';
 
 export interface AuditReport {
   timestamp: Date;
@@ -44,8 +45,14 @@ export class AuditAgent {
         const evidence = await adapter.fetchEvidence();
         collectedEvidence.push(...evidence);
       } catch (err) {
-        // Continuous failure recovery per individual adapter
+        console.error(`[-] Adapter ${adapter.id} failed:`, (err as Error).message);
       }
+    }
+
+    // FIX: Persist all evidence to DB before evaluation so FKs resolve
+    if (collectedEvidence.length > 0) {
+      console.log(`[+] Persisting ${collectedEvidence.length} evidence records...`);
+      await saveEvidence(collectedEvidence);
     }
 
     const results = this.evaluator.evaluateAll(this.controls, collectedEvidence);

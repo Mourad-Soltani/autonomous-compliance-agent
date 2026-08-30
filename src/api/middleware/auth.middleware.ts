@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { verifyToken, validateApiKey, AuthContext, requireScope } from '../services/auth.service';
+import { verifyToken, validateApiKey, requireScope, AuthContext } from '../services/auth.service.js';
+import { JWTPayloadSchema } from '../../types/auth.js';
 
 // Extend Express Request
 declare global {
@@ -38,7 +39,8 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     // Try JWT
     if (authHeader.startsWith('Bearer ')) {
       const token = authHeader.slice(7);
-      const payload = verifyToken(token);
+      const payloadRaw = verifyToken(token);
+      const payload = JWTPayloadSchema.parse(payloadRaw);
 
       req.auth = {
         user: {
@@ -46,13 +48,13 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
           email: payload.email,
           name: null,
           avatar: null,
-          role: payload.role as any,
+          role: payload.role,
           status: 'ACTIVE',
-          organizationId: payload.orgId || null,
+          organizationId: payload.orgId,
           createdAt: new Date(),
           updatedAt: new Date(),
           organization: null,
-        } as any,
+        } as any,  // Cast needed until Prisma User type is fully aligned
         scopes: payload.scopes,
       };
 
@@ -88,16 +90,18 @@ export async function optionalAuthMiddleware(req: Request, res: Response, next: 
 
     if (authHeader.startsWith('Bearer ')) {
       const token = authHeader.slice(7);
-      const payload = verifyToken(token);
+      const payloadRaw = verifyToken(token);
+      const payload = JWTPayloadSchema.parse(payloadRaw);
+
       req.auth = {
         user: {
           id: payload.userId,
           email: payload.email,
           name: null,
           avatar: null,
-          role: payload.role as any,
+          role: payload.role,
           status: 'ACTIVE',
-          organizationId: payload.orgId || null,
+          organizationId: payload.orgId,
           createdAt: new Date(),
           updatedAt: new Date(),
           organization: null,
