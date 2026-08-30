@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "server": "tsx src/server.ts",
     "bundle": "node scripts/bundle.js",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push"
