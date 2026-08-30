@@ -1,0 +1,139 @@
+# ============================================
+# Autonomous Compliance Agent — Docker Compose Stack
+# Includes: App, PostgreSQL, Redis (cache), Nginx (reverse proxy)
+# ============================================
+
+version: "3.9"
+
+services:
+  # --- Main Application ---
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: aca-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://compliance:changeme@db:5432/compliance_db?schema=public
+      REDIS_URL: redis://redis:6379
+      EXPORT_DIR: /app/exports
+      # Cloud credentials (override in .env or via secrets)
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_OWNER: ${GITHUB_OWNER:-}
+      GITHUB_REPO: ${GITHUB_REPO:-}
+      AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:-}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      AZURE_RESOURCE_GROUP: ${AZURE_RESOURCE_GROUP:-compliance-rg}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+    volumes:
+      - exports:/app/exports
+      - logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - aca-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # --- PostgreSQL Database ---
+  db:
+    image: postgres:16-alpine
+    container_name: aca-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: compliance
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: compliance_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./prisma/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - aca-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U compliance -d compliance_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Redis Cache & Queue ---
+  redis:
+    image: redis:7-alpine
+    container_name: aca-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - aca-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Nginx Reverse Proxy (optional, for SSL termination) ---
+  nginx:
+    image: nginx:alpine
+    container_name: aca-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - app
+    networks:
+      - aca-network
+
+  # --- Prisma Studio (DB Admin UI, dev only) ---
+  studio:
+    image: node:20-alpine
+    container_name: aca-studio
+    working_dir: /app
+    command: npx prisma studio --port 5555 --hostname 0.0.0.0
+    environment:
+      DATABASE_URL: postgresql://compliance:changeme@db:5432/compliance_db?schema=public
+    volumes:
+      - .:/app
+    ports:
+      - "5555:5555"
+    depends_on:
+      - db
+    networks:
+      - aca-network
+    profiles:
+      - dev
+
+volumes:
+  postgres_data:
+  redis_data:
+  exports:
+  logs:
+
+networks:
+  aca-network:
+    driver: bridge
