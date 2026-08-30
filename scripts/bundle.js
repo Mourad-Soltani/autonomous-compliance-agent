@@ -38,9 +38,12 @@ const FILES_TO_BUNDLE = [
   'src/adapters/github.remediator.ts',
   'src/adapters/azure.adapter.ts',
   'src/adapters/azure.remediator.ts',
+  'src/adapters/gcp.adapter.ts',
+  'src/adapters/gcp.remediator.ts',
 
   // --- Templates ---
   'src/templates/controls.ts',
+  'src/templates/cis-benchmarks.ts',
   'src/templates/loader.ts',
 
   // --- Notifications ---
@@ -54,6 +57,7 @@ const FILES_TO_BUNDLE = [
   'src/api/routes/template.routes.ts',
   'src/api/routes/export.routes.ts',
   'src/api/routes/adapter.routes.ts',
+  'src/api/routes/custom-control.routes.ts',
   'src/api/middleware/error-handler.ts',
 
   // --- Dashboard ---
@@ -62,6 +66,7 @@ const FILES_TO_BUNDLE = [
   'src/dashboard/pages/AuditRuns.tsx',
   'src/dashboard/pages/Controls.tsx',
   'src/dashboard/pages/AuditorPortal.tsx',
+  'src/dashboard/pages/CustomControlBuilder.tsx',
   'src/dashboard/components/Sidebar.tsx',
   'src/dashboard/components/StatusBadge.tsx',
   'src/dashboard/components/ExportButton.tsx',
