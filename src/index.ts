@@ -1,8 +1,11 @@
 import { PolicyEvaluator } from './policies/evaluator.js';
+import { PolicyRemediator } from './policies/remediator.js';
 import { AuditAgent } from './agents/audit.agent.js';
 import { AWSAdapter } from './adapters/aws.adapter.js';
 import { GitHubAdapter } from './adapters/github.adapter.js';
 import { SlackAdapter } from './adapters/slack.adapter.js';
+import { registerAWSRemediations } from './adapters/aws.remediator.js';
+import { registerGitHubRemediations } from './adapters/github.remediator.js';
 import { SOC2Control, Evidence } from './types/policy.js';
 import { syncControls, saveAuditReport, prisma } from './core/db.js';
 
@@ -37,7 +40,13 @@ const DEFAULT_CONTROLS: SOC2Control[] = [
 ];
 
 async function main() {
+  const args = process.argv.slice(2);
+  const autoRemediate = args.includes('--remediate') || args.includes('-r');
+
   console.log('[+] Initializing Autonomous Compliance Engine...');
+  if (autoRemediate) {
+    console.log('[+] Auto-remediation ENABLED — non-compliant controls will be fixed automatically.');
+  }
 
   const evaluator = new PolicyEvaluator();
 
@@ -78,8 +87,15 @@ async function main() {
     };
   });
 
+  // Build remediator if auto-remediation is enabled
+  const remediator = autoRemediate ? new PolicyRemediator() : undefined;
+  if (remediator) {
+    registerAWSRemediations(remediator);
+    registerGitHubRemediations(remediator);
+  }
+
   // Orchestrate Adapters
-  const agent = new AuditAgent(evaluator);
+  const agent = new AuditAgent(evaluator, remediator);
   agent.registerControls(DEFAULT_CONTROLS);
 
   const awsAdapter = new AWSAdapter({
@@ -105,9 +121,19 @@ async function main() {
   await syncControls(DEFAULT_CONTROLS);
 
   console.log('[+] Executing compliance evaluation loop...');
-  const report = await agent.executeAudit();
+  const report = await agent.executeAudit(autoRemediate);
 
   console.log(`[+] Audit complete. Passed: ${report.summary.compliantCount}/${report.summary.totalControls}`);
+
+  if (report.remediations) {
+    const fixed = Array.from(report.remediations.values()).filter((o) => o.success).length;
+    const failed = Array.from(report.remediations.values()).filter((o) => !o.success).length;
+    console.log(`[+] Remediation: ${fixed} controls fixed, ${failed} failed.`);
+    for (const [controlId, outcome] of report.remediations) {
+      const icon = outcome.success ? '✅' : '❌';
+      console.log(`    ${icon} ${controlId}: ${outcome.message}`);
+    }
+  }
 
   console.log('[+] Storing run metrics to PostgreSQL...');
   const runId = await saveAuditReport(report);
