@@ -1,10 +1,13 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { URL } from 'url';
 import { PolicyEvaluator } from './policies/evaluator.js';
+import { PolicyRemediator } from './policies/remediator.js';
 import { AuditAgent } from './agents/audit.agent.js';
 import { AWSAdapter } from './adapters/aws.adapter.js';
 import { GitHubAdapter } from './adapters/github.adapter.js';
 import { SlackAdapter } from './adapters/slack.adapter.js';
+import { registerAWSRemediations } from './adapters/aws.remediator.js';
+import { registerGitHubRemediations } from './adapters/github.remediator.js';
 import { SOC2Control, Evidence } from './types/policy.js';
 import { syncControls, saveAuditReport, prisma } from './core/db.js';
 
@@ -45,7 +48,7 @@ function json(res: ServerResponse, status: number, data: unknown): void {
   res.end(JSON.stringify(data));
 }
 
-function buildAgent(): AuditAgent {
+function buildEvaluator(): PolicyEvaluator {
   const evaluator = new PolicyEvaluator();
 
   evaluator.registerRule('CC6.1', (evidenceList: Evidence[]) => {
@@ -84,7 +87,20 @@ function buildAgent(): AuditAgent {
     };
   });
 
-  const agent = new AuditAgent(evaluator);
+  return evaluator;
+}
+
+function buildRemediator(): PolicyRemediator {
+  const remediator = new PolicyRemediator();
+  registerAWSRemediations(remediator);
+  registerGitHubRemediations(remediator);
+  return remediator;
+}
+
+function buildAgent(autoRemediate = false): AuditAgent {
+  const evaluator = buildEvaluator();
+  const remediator = autoRemediate ? buildRemediator() : undefined;
+  const agent = new AuditAgent(evaluator, remediator);
   agent.registerControls(DEFAULT_CONTROLS);
 
   const awsAdapter = new AWSAdapter({
@@ -106,36 +122,26 @@ function buildAgent(): AuditAgent {
   return agent;
 }
 
-async function triggerAudit(slackWebhookUrl?: string): Promise<unknown> {
-  const agent = buildAgent();
+async function triggerAudit(autoRemediate = false): Promise<unknown> {
+  const agent = buildAgent(autoRemediate);
 
   console.log('[+] Syncing SOC 2 control schema...');
   await syncControls(DEFAULT_CONTROLS);
 
-  console.log('[+] Executing compliance evaluation loop...');
-  const report = await agent.executeAudit();
+  console.log(`[+] Executing compliance evaluation loop${autoRemediate ? ' with auto-remediation' : ''}...`);
+  const report = await agent.executeAudit(autoRemediate);
 
   console.log(`[+] Audit complete. Passed: ${report.summary.compliantCount}/${report.summary.totalControls}`);
+
+  if (report.remediations) {
+    const fixed = Array.from(report.remediations.values()).filter((o) => o.success).length;
+    const failed = Array.from(report.remediations.values()).filter((o) => !o.success).length;
+    console.log(`[+] Remediation: ${fixed} fixed, ${failed} failed.`);
+  }
 
   console.log('[+] Storing run metrics to PostgreSQL...');
   const runId = await saveAuditReport(report);
   console.log(`[+] Run saved successfully. ID: ${runId}`);
-
-  if (slackWebhookUrl) {
-    try {
-      const slack = new SlackAdapter({
-        adapterId: 'slack-alerts',
-        enabled: true,
-        webhookUrl: slackWebhookUrl,
-        channel: process.env.SLACK_CHANNEL,
-        username: 'Compliance Agent',
-      });
-      await slack.sendAuditSummary(report);
-      console.log('[+] Slack notification sent.');
-    } catch (err) {
-      console.error('[-] Failed to send Slack notification:', (err as Error).message);
-    }
-  }
 
   return { runId, ...report };
 }
@@ -155,21 +161,27 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   }
 
   try {
-    // GET /health — health check
+    // GET /health
     if (url.pathname === '/health' && req.method === 'GET') {
       json(res, 200, { status: 'ok', timestamp: new Date().toISOString() });
       return;
     }
 
-    // POST /audit — trigger a new audit run
+    // POST /audit — trigger audit (detection only)
     if (url.pathname === '/audit' && req.method === 'POST') {
-      const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
-      const result = await triggerAudit(slackWebhookUrl);
+      const result = await triggerAudit(false);
       json(res, 200, result);
       return;
     }
 
-    // GET /audit/runs — list recent audit runs
+    // POST /remediate — trigger audit + auto-fix non-compliant controls
+    if (url.pathname === '/remediate' && req.method === 'POST') {
+      const result = await triggerAudit(true);
+      json(res, 200, result);
+      return;
+    }
+
+    // GET /audit/runs
     if (url.pathname === '/audit/runs' && req.method === 'GET') {
       const limit = parseInt(url.searchParams.get('limit') || '10', 10);
       const runs = await prisma.auditRun.findMany({
@@ -188,7 +200,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       return;
     }
 
-    // GET /audit/runs/:id — get a specific audit run
+    // GET /audit/runs/:id
     if (url.pathname.startsWith('/audit/runs/') && req.method === 'GET') {
       const runId = url.pathname.split('/')[3];
       const run = await prisma.auditRun.findUnique({
@@ -210,7 +222,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       return;
     }
 
-    // GET /controls — list all controls
+    // GET /controls
     if (url.pathname === '/controls' && req.method === 'GET') {
       const controls = await prisma.control.findMany({
         orderBy: { createdAt: 'desc' },
@@ -219,7 +231,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       return;
     }
 
-    // GET /controls/:id — get a specific control
+    // GET /controls/:id
     if (url.pathname.startsWith('/controls/') && req.method === 'GET') {
       const controlId = url.pathname.split('/')[2];
       const control = await prisma.control.findUnique({
@@ -237,7 +249,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       return;
     }
 
-    // GET /evidence — list all evidence
+    // GET /evidence
     if (url.pathname === '/evidence' && req.method === 'GET') {
       const limit = parseInt(url.searchParams.get('limit') || '50', 10);
       const evidence = await prisma.evidence.findMany({
@@ -261,7 +273,8 @@ server.listen(PORT, async () => {
   console.log(`[+] Compliance Agent API running on http://localhost:${PORT}`);
   console.log(`[+] Endpoints:`);
   console.log(`    GET  /health          → Health check`);
-  console.log(`    POST /audit           → Trigger compliance audit`);
+  console.log(`    POST /audit           → Trigger compliance audit (detection only)`);
+  console.log(`    POST /remediate       → Trigger audit + auto-fix non-compliant controls`);
   console.log(`    GET  /audit/runs      → List audit runs`);
   console.log(`    GET  /audit/runs/:id  → Get specific audit run`);
   console.log(`    GET  /controls        → List SOC 2 controls`);
