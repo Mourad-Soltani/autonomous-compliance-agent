@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Compliance Agent — Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="logo-icon">🔒</div>
+        <div class="logo-text">Compliance<br><span>Agent</span></div>
+      </div>
+      <nav class="nav">
+        <a href="#overview" class="nav-item active" data-page="overview">
+          <span class="nav-icon">📊</span> Overview
+        </a>
+        <a href="#audits" class="nav-item" data-page="audits">
+          <span class="nav-icon">🔍</span> Audit Runs
+        </a>
+        <a href="#controls" class="nav-item" data-page="controls">
+          <span class="nav-icon">🛡️</span> Controls
+        </a>
+        <a href="#evidence" class="nav-item" data-page="evidence">
+          <span class="nav-icon">📋</span> Evidence
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="api-status" id="apiStatus">
+          <span class="status-dot"></span> Checking API...
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main">
+      <!-- Header -->
+      <header class="header">
+        <h1 id="pageTitle">Overview</h1>
+        <div class="header-actions">
+          <button class="btn btn-secondary" id="btnAudit" onclick="triggerAudit()">
+            <span class="btn-icon">🔍</span> Run Audit
+          </button>
+          <button class="btn btn-primary" id="btnRemediate" onclick="triggerRemediate()">
+            <span class="btn-icon">🛠️</span> Audit + Remediate
+          </button>
+        </div>
+      </header>
+
+      <!-- Notification Toast -->
+      <div class="toast-container" id="toastContainer"></div>
+
+      <!-- Loading Overlay -->
+      <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <p>Running compliance audit...</p>
+      </div>
+
+      <!-- Pages -->
+      <div class="page active" id="page-overview">
+        <!-- Stats Cards -->
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">Total Controls</div>
+            <div class="stat-value" id="statTotal">—</div>
+            <div class="stat-trend">SOC 2 Trust Criteria</div>
+          </div>
+          <div class="stat-card stat-success">
+            <div class="stat-label">Compliant</div>
+            <div class="stat-value" id="statCompliant">—</div>
+            <div class="stat-trend" id="statCompliantPct">—</div>
+          </div>
+          <div class="stat-card stat-danger">
+            <div class="stat-label">Non-Compliant</div>
+            <div class="stat-value" id="statNonCompliant">—</div>
+            <div class="stat-trend" id="statNonCompliantPct">—</div>
+          </div>
+          <div class="stat-card stat-warning">
+            <div class="stat-label">Not Evaluated</div>
+            <div class="stat-value" id="statNotEvaluated">—</div>
+            <div class="stat-trend">Missing evidence</div>
+          </div>
+        </div>
+
+        <!-- Latest Audit & Chart -->
+        <div class="dashboard-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Latest Audit Run</h3>
+              <span class="badge" id="latestStatus">—</span>
+            </div>
+            <div class="panel-body" id="latestAuditDetails">
+              <p class="empty-state">No audit runs yet. Click "Run Audit" to begin.</p>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Compliance Distribution</h3>
+            </div>
+            <div class="panel-body chart-container">
+              <canvas id="complianceChart" width="300" height="200"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Remediations -->
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Recent Remediation Activity</h3>
+          </div>
+          <div class="panel-body" id="remediationActivity">
+            <p class="empty-state">No remediations yet. Run "Audit + Remediate" to see auto-fixes.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="page" id="page-audits">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Audit Run History</h3>
+          </div>
+          <div class="panel-body">
+            <table class="data-table" id="auditsTable">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Total</th>
+                  <th>Compliant</th>
+                  <th>Non-Compliant</th>
+                  <th>Not Evaluated</th>
+                  <th>Pass Rate</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="page" id="page-controls">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>SOC 2 Controls</h3>
+          </div>
+          <div class="panel-body">
+            <table class="data-table" id="controlsTable">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Title</th>
+                  <th>Category</th>
+                  <th>Severity</th>
+                  <th>Automated</th>
+                  <th>Last Updated</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="page" id="page-evidence">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Collected Evidence</h3>
+          </div>
+          <div class="panel-body">
+            <table class="data-table" id="evidenceTable">
+              <thead>
+                <tr>
+                  <th>Control</th>
+                  <th>Source</th>
+                  <th>Timestamp</th>
+                  <th>Resource</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
