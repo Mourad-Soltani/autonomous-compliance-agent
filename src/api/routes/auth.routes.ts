@@ -11,8 +11,8 @@ import {
   LoginSchema,
   RegisterSchema,
   CreateApiKeySchema,
-} from '../../services/auth.service';
-import { authMiddleware, requireAuth, requireRole } from '../middleware/auth.middleware';
+} from '../../services/auth.service.js';
+import { authMiddleware, requireAuth, requireRole } from '../middleware/auth.middleware.js';
 
 const router = Router();
 
@@ -20,7 +20,6 @@ const router = Router();
 // Public Routes
 // ============================================
 
-// POST /auth/register
 router.post('/register', async (req: Request, res: Response) => {
   try {
     const data = RegisterSchema.parse(req.body);
@@ -46,7 +45,6 @@ router.post('/register', async (req: Request, res: Response) => {
   }
 });
 
-// POST /auth/login
 router.post('/login', async (req: Request, res: Response) => {
   try {
     const data = LoginSchema.parse(req.body);
@@ -73,7 +71,6 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
-// GET /auth/sso/:slug — Get SSO configuration for an organization
 router.get('/sso/:slug', async (req: Request, res: Response) => {
   try {
     const config = await getSSOConfig(req.params.slug);
@@ -97,7 +94,6 @@ router.get('/sso/:slug', async (req: Request, res: Response) => {
 
 router.use(authMiddleware);
 
-// GET /auth/me — Current user
 router.get('/me', (req: Request, res: Response) => {
   if (!req.auth) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -114,11 +110,6 @@ router.get('/me', (req: Request, res: Response) => {
   });
 });
 
-// ============================================
-// API Key Management
-// ============================================
-
-// GET /auth/api-keys — List user's API keys
 router.get('/api-keys', async (req: Request, res: Response) => {
   try {
     const keys = await listApiKeys(req.auth!.user.id);
@@ -128,14 +119,13 @@ router.get('/api-keys', async (req: Request, res: Response) => {
   }
 });
 
-// POST /auth/api-keys — Create new API key
 router.post('/api-keys', requireAuth('admin'), async (req: Request, res: Response) => {
   try {
     const data = CreateApiKeySchema.parse(req.body);
     const result = await createApiKey(req.auth!.user.id, data);
     res.status(201).json({
       message: 'API key created',
-      key: result.key, // Only shown once!
+      key: result.key,
       apiKey: {
         id: result.apiKey.id,
         name: result.apiKey.name,
@@ -152,7 +142,6 @@ router.post('/api-keys', requireAuth('admin'), async (req: Request, res: Respons
   }
 });
 
-// DELETE /auth/api-keys/:id — Revoke API key
 router.delete('/api-keys/:id', requireAuth('admin'), async (req: Request, res: Response) => {
   try {
     await revokeApiKey(req.auth!.user.id, req.params.id);
@@ -162,11 +151,6 @@ router.delete('/api-keys/:id', requireAuth('admin'), async (req: Request, res: R
   }
 });
 
-// ============================================
-// SSO Configuration (Admin only)
-// ============================================
-
-// POST /auth/sso-config — Configure SSO for organization
 router.post('/sso-config', requireRole('OWNER', 'ADMIN'), async (req: Request, res: Response) => {
   try {
     const orgId = req.auth!.user.organizationId;

@@ -22,13 +22,16 @@ type CustomControl = z.infer<typeof CustomControlSchema> & {
   active: boolean;
 };
 
-// In-memory store (replace with DB in production)
+interface CheckResult {
+  compliant: boolean;
+  [key: string]: unknown;
+}
+
 const customControls: Map<string, CustomControl> = new Map();
 
 const router = Router();
 
-// GET /api/controls/custom — List all custom controls
-router.get('/', (req: Request, res: Response) => {
+router.get('/', (_req: Request, res: Response) => {
   const controls = Array.from(customControls.values());
   res.json({
     controls,
@@ -38,7 +41,6 @@ router.get('/', (req: Request, res: Response) => {
   });
 });
 
-// GET /api/controls/custom/:id — Get single control
 router.get('/:id', (req: Request, res: Response) => {
   const control = customControls.get(req.params.id);
   if (!control) {
@@ -47,7 +49,6 @@ router.get('/:id', (req: Request, res: Response) => {
   res.json(control);
 });
 
-// POST /api/controls/custom — Create new control
 router.post('/', (req: Request, res: Response) => {
   try {
     const parsed = CustomControlSchema.parse(req.body);
@@ -80,7 +81,6 @@ router.post('/', (req: Request, res: Response) => {
   }
 });
 
-// PUT /api/controls/custom/:id — Update control
 router.put('/:id', (req: Request, res: Response) => {
   const existing = customControls.get(req.params.id);
   if (!existing) {
@@ -113,7 +113,6 @@ router.put('/:id', (req: Request, res: Response) => {
   }
 });
 
-// DELETE /api/controls/custom/:id — Delete control
 router.delete('/:id', (req: Request, res: Response) => {
   if (!customControls.has(req.params.id)) {
     return res.status(404).json({ error: 'Custom control not found' });
@@ -123,7 +122,6 @@ router.delete('/:id', (req: Request, res: Response) => {
   res.json({ message: 'Custom control deleted successfully' });
 });
 
-// POST /api/controls/custom/:id/activate — Activate control
 router.post('/:id/activate', (req: Request, res: Response) => {
   const control = customControls.get(req.params.id);
   if (!control) {
@@ -135,7 +133,6 @@ router.post('/:id/activate', (req: Request, res: Response) => {
   res.json({ message: 'Control activated', control });
 });
 
-// POST /api/controls/custom/:id/deactivate — Deactivate control
 router.post('/:id/deactivate', (req: Request, res: Response) => {
   const control = customControls.get(req.params.id);
   if (!control) {
@@ -147,7 +144,6 @@ router.post('/:id/deactivate', (req: Request, res: Response) => {
   res.json({ message: 'Control deactivated', control });
 });
 
-// POST /api/controls/custom/:id/test — Test control check
 router.post('/:id/test', async (req: Request, res: Response) => {
   const control = customControls.get(req.params.id);
   if (!control) {
@@ -155,15 +151,14 @@ router.post('/:id/test', async (req: Request, res: Response) => {
   }
 
   try {
-    // In production: sandbox the execution using vm2 or isolated-vm
     const checkFn = new Function('return ' + control.checkConfig)();
-    const results = await checkFn();
+    const results: CheckResult[] = await checkFn();
 
     res.json({
       controlId: control.id,
       testedAt: new Date().toISOString(),
       results,
-      passed: results.every((r: any) => r.compliant),
+      passed: results.every((r) => r.compliant),
     });
   } catch (error) {
     res.status(500).json({

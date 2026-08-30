@@ -8,6 +8,8 @@ import { registerAWSRemediations } from './adapters/aws.remediator.js';
 import { registerGitHubRemediations } from './adapters/github.remediator.js';
 import { AzureAdapter } from './adapters/azure.adapter.js';
 import { registerAzureRemediations } from './adapters/azure.remediator.js';
+import { GCPAdapter } from './adapters/gcp.adapter.js';
+import { registerGCPRemediations } from './adapters/gcp.remediator.js';
 import { registerK8sRemediations } from './adapters/k8s.remediator.js';
 import { SOC2Control, Evidence } from './types/policy.js';
 import { syncControls, saveAuditReport, saveEvidence, prisma } from './core/db.js';
@@ -120,6 +122,7 @@ async function main() {
     registerAWSRemediations(remediator);
     registerGitHubRemediations(remediator);
     registerAzureRemediations(remediator);
+    registerGCPRemediations(remediator);
     registerK8sRemediations(remediator);
   }
 
@@ -152,6 +155,14 @@ async function main() {
   agent.registerAdapter(awsAdapter);
   agent.registerAdapter(githubAdapter);
   agent.registerAdapter(azureAdapter);
+
+  const gcpAdapter = new GCPAdapter({
+    adapterId: 'gcp-prod-project',
+    enabled: true,
+    projectId: process.env.GCP_PROJECT_ID || 'compliance-project',
+  });
+
+  agent.registerAdapter(gcpAdapter);
 
   console.log('[+] Syncing SOC 2 control schema...');
   await syncControls(DEFAULT_CONTROLS);

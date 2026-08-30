@@ -31,6 +31,19 @@ enum ComplianceStatus {
   PARTIALLY_COMPLIANT
 }
 
+enum UserRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING
+}
+
 model Control {
   id           String             @id
   category     SOC2Category
@@ -93,4 +106,105 @@ model EvaluationResult {
   @@index([auditRunId])
   @@index([controlId])
   @@map("evaluation_results")
+}
+
+// ============================================
+// Auth & Identity Models
+// ============================================
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("FREE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     User[]
+  apiKeys   ApiKey[]
+  ssoConfig SSOConfig?
+
+  @@map("organizations")
+}
+
+model User {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  name           String?
+  avatar         String?
+  role           UserRole  @default(MEMBER)
+  status         UserStatus @default(ACTIVE)
+  passwordHash   String?
+  organizationId String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  apiKeys      ApiKey[]
+  sessions     Session[]
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+model ApiKey {
+  id             String    @id @default(uuid())
+  name           String
+  keyHash        String    @unique
+  keyPrefix      String
+  scopes         String[]
+  userId         String
+  organizationId String?
+  expiresAt      DateTime?
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@map("api_keys")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model AuditLog {
+  id       String   @id @default(uuid())
+  userId   String
+  action   String
+  resource String
+  metadata Json?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("audit_logs")
+}
+
+model SSOConfig {
+  id           String   @id @default(uuid())
+  organizationId String @unique
+  provider     String
+  clientId     String
+  clientSecret String
+  issuerUrl    String
+  authorizationUrl String?
+  scopes       String?
+  enabled      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("sso_configs")
 }

@@ -80,13 +80,13 @@ export async function registerUser(data: z.infer<typeof RegisterSchema>) {
     data: {
       email: data.email,
       name: data.name,
+      passwordHash,
       role: organizationId ? 'OWNER' : 'MEMBER',
       organizationId,
     },
     include: { organization: true },
   });
 
-  // Create audit log
   await prisma.auditLog.create({
     data: {
       userId: user.id,
@@ -109,9 +109,11 @@ export async function loginUser(data: z.infer<typeof LoginSchema>) {
     throw new Error('Invalid credentials');
   }
 
-  // In production, compare against password hash stored in DB
-  // For demo: simple check (replace with bcrypt compare)
-  const valid = await compare(data.password, user.passwordHash || '');
+  if (!user.passwordHash) {
+    throw new Error('Invalid credentials');
+  }
+
+  const valid = await compare(data.password, user.passwordHash);
   if (!valid) {
     throw new Error('Invalid credentials');
   }
@@ -220,14 +222,12 @@ export async function validateApiKey(key: string): Promise<AuthContext | null> {
     where: { keyHash },
     include: {
       user: { include: { organization: true } },
-      organization: true,
     },
   });
 
   if (!apiKey || apiKey.revokedAt) return null;
   if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null;
 
-  // Update last used
   await prisma.apiKey.update({
     where: { id: apiKey.id },
     data: { lastUsedAt: new Date() },
@@ -307,7 +307,7 @@ export async function createOrUpdateSSOConfig(
   return prisma.sSOConfig.upsert({
     where: { organizationId: orgId },
     update: {
-      provider: data.provider as any,
+      provider: data.provider,
       clientId: data.clientId,
       clientSecret: data.clientSecret,
       issuerUrl: data.issuerUrl,
@@ -315,7 +315,7 @@ export async function createOrUpdateSSOConfig(
     },
     create: {
       organizationId: orgId,
-      provider: data.provider as any,
+      provider: data.provider,
       clientId: data.clientId,
       clientSecret: data.clientSecret,
       issuerUrl: data.issuerUrl,
