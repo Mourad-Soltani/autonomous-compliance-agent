@@ -328,6 +328,137 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       return;
     }
 
+
+    // GET /audit/runs/:id/export?format=csv|json|markdown|html
+    if (url.pathname.match(/^\/audit\/runs\/[^/]+\/export$/) && req.method === 'GET') {
+      const runId = url.pathname.split('/')[3];
+      const format = (url.searchParams.get('format') || 'json') as 'csv' | 'json' | 'markdown' | 'html';
+
+      const run = await prisma.auditRun.findUnique({
+        where: { id: runId },
+        include: {
+          results: {
+            include: {
+              control: true,
+              evidenceList: true,
+            },
+          },
+        },
+      });
+
+      if (!run) {
+        json(res, 404, { error: 'Audit run not found' });
+        return;
+      }
+
+      const { exportToCSV, exportToJSON, exportToMarkdown, exportToAuditorHTML } = await import('./core/export.js');
+
+      const report = {
+        timestamp: run.timestamp,
+        summary: {
+          totalControls: run.totalControls,
+          compliantCount: run.compliantCount,
+          nonCompliantCount: run.nonCompliantCount,
+          notEvaluatedCount: run.notEvaluatedCount,
+        },
+        results: run.results.map((r: any) => ({
+          controlId: r.controlId,
+          status: r.status,
+          findings: r.findings,
+          remediationSteps: r.remediationSteps,
+          evaluatedAt: r.evaluatedAt,
+        })),
+      };
+
+      const filename = `audit-report-${runId}-${format}`;
+
+      if (format === 'csv') {
+        const csv = exportToCSV(report as any);
+        res.writeHead(200, {
+          'Content-Type': 'text/csv',
+          'Content-Disposition': `attachment; filename="${filename}.csv"`,
+        });
+        res.end(csv);
+        return;
+      }
+
+      if (format === 'json') {
+        const json = exportToJSON(report as any);
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Content-Disposition': `attachment; filename="${filename}.json"`,
+        });
+        res.end(json);
+        return;
+      }
+
+      if (format === 'markdown') {
+        const md = exportToMarkdown(report as any);
+        res.writeHead(200, {
+          'Content-Type': 'text/markdown',
+          'Content-Disposition': `attachment; filename="${filename}.md"`,
+        });
+        res.end(md);
+        return;
+      }
+
+      if (format === 'html') {
+        const html = exportToAuditorHTML(report as any);
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(html);
+        return;
+      }
+
+      json(res, 400, { error: 'Invalid format. Use csv, json, markdown, or html' });
+      return;
+    }
+
+    // GET /audit/runs/:id/auditor — auditor-friendly HTML view
+    if (url.pathname.match(/^\/audit\/runs\/[^/]+\/auditor$/) && req.method === 'GET') {
+      const runId = url.pathname.split('/')[3];
+
+      const run = await prisma.auditRun.findUnique({
+        where: { id: runId },
+        include: {
+          results: {
+            include: {
+              control: true,
+              evidenceList: true,
+            },
+          },
+        },
+      });
+
+      if (!run) {
+        json(res, 404, { error: 'Audit run not found' });
+        return;
+      }
+
+      const { exportToAuditorHTML } = await import('./core/export.js');
+
+      const report = {
+        timestamp: run.timestamp,
+        summary: {
+          totalControls: run.totalControls,
+          compliantCount: run.compliantCount,
+          nonCompliantCount: run.nonCompliantCount,
+          notEvaluatedCount: run.notEvaluatedCount,
+        },
+        results: run.results.map((r: any) => ({
+          controlId: r.controlId,
+          status: r.status,
+          findings: r.findings,
+          remediationSteps: r.remediationSteps,
+          evaluatedAt: r.evaluatedAt,
+        })),
+      };
+
+      const html = exportToAuditorHTML(report as any);
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(html);
+      return;
+    }
+
     // 404 fallback
     json(res, 404, { error: 'Not found', path: url.pathname, method: req.method });
   } catch (err) {
@@ -340,17 +471,19 @@ server.listen(PORT, async () => {
   console.log(`[+] Compliance Agent API running on http://localhost:${PORT}`);
   console.log(`[+] Dashboard available at http://localhost:${PORT}/dashboard`);
   console.log(`[+] Endpoints:`);
-  console.log(`    GET  /                    → Web Dashboard`);
-  console.log(`    GET  /health              → Health check`);
-  console.log(`    POST /audit               → Trigger compliance audit`);
-  console.log(`    POST /remediate           → Trigger audit + auto-fix`);
-  console.log(`    GET  /audit/runs          → List audit runs`);
-  console.log(`    GET  /audit/runs/:id      → Get specific audit run`);
-  console.log(`    GET  /controls            → List SOC 2 controls`);
-  console.log(`    GET  /controls/:id        → Get specific control`);
-  console.log(`    GET  /evidence            → List collected evidence`);
-  console.log(`    GET  /templates           → List control templates`);
-  console.log(`    POST /templates/seed      → Seed database with templates`);
+  console.log(`    GET  /                              → Web Dashboard`);
+  console.log(`    GET  /health                        → Health check`);
+  console.log(`    POST /audit                         → Trigger compliance audit`);
+  console.log(`    POST /remediate                     → Trigger audit + auto-fix`);
+  console.log(`    GET  /audit/runs                    → List audit runs`);
+  console.log(`    GET  /audit/runs/:id                → Get specific audit run`);
+  console.log(`    GET  /audit/runs/:id/export         → Export audit (csv/json/md/html)`);
+  console.log(`    GET  /audit/runs/:id/auditor        → Auditor-friendly HTML view`);
+  console.log(`    GET  /controls                      → List SOC 2 controls`);
+  console.log(`    GET  /controls/:id                  → Get specific control`);
+  console.log(`    GET  /evidence                      → List collected evidence`);
+  console.log(`    GET  /templates                     → List control templates`);
+  console.log(`    POST /templates/seed                → Seed database with templates`);
 });
 
 process.on('SIGINT', async () => {
