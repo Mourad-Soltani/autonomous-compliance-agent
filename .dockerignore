@@ -1,0 +1,48 @@
+# Dependencies
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist
+build
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Tests
+coverage
+*.test.ts
+*.spec.ts
+jest.config.js
+
+# Documentation (keep for container context)
+# README.md
+# docs/
+
+# Local data
+exports/*
+logs/*
+*.log
+
+# Prisma (keep schema, ignore local DB)
+prisma/dev.db
+prisma/*.db-journal
