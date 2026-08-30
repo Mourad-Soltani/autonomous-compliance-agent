@@ -6,12 +6,15 @@
 
 This TypeScript-based platform continuously audits your cloud infrastructure and code repositories against SOC 2 Trust Services Criteria, evaluates collected evidence against dynamic policy rules, **automatically fixes non-compliant controls**, and persists audit reports to PostgreSQL.
 
+**Key differentiator:** Unlike Vanta, Drata, or Secureframe, this agent does not just *detect* misconfigurations — it **remediates them automatically** via live AWS and GitHub API calls.
+
 ## Architecture
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   AWS Adapter   │     │ GitHub Adapter  │     │  Slack Adapter  │
 │  (CC6.1, CC7.2) │     │    (CC6.8)      │     │  (Alerts)       │
+│   LIVE or MOCK  │     │   LIVE or MOCK  │     │                 │
 └────────┬────────┘     └────────┬────────┘     └─────────────────┘
          │                       │
          └───────────┬───────────┘
@@ -26,6 +29,7 @@ This TypeScript-based platform continuously audits your cloud infrastructure and
                      ▼
             ┌─────────────────┐     ┌─────────────────┐
             │ Policy Remediator│ ←── │ Auto-fix engine │
+            │  (LIVE or MOCK)  │     │                 │
             └────────┬────────┘     └─────────────────┘
                      ▼
             ┌─────────────────┐
@@ -61,7 +65,7 @@ npx prisma db push
 ### 4. Run CLI Audit
 
 ```bash
-# Detection only
+# Detection only (mock mode if no credentials)
 npm run dev
 
 # Detection + automatic remediation
@@ -75,6 +79,40 @@ npm run server
 ```
 
 The API will be available at `http://localhost:3000`.
+
+## Live Mode vs Mock Mode
+
+The agent operates in **two modes** depending on credential availability:
+
+| Mode | Trigger | Behavior |
+|------|---------|----------|
+| **LIVE** | AWS/GitHub credentials provided in `.env` | Connects to real APIs, collects actual evidence, performs real remediation |
+| **MOCK** | Credentials missing | Returns simulated data for demo/testing purposes |
+
+### AWS Live Mode
+
+Requires:
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_REGION`
+
+IAM permissions needed:
+- `iam:GetAccountPasswordPolicy`
+- `iam:GetAccountSummary`
+- `iam:UpdateAccountPasswordPolicy`
+- `cloudtrail:DescribeTrails`
+- `cloudtrail:GetTrailStatus`
+- `cloudtrail:CreateTrail`
+- `cloudtrail:StartLogging`
+- `cloudtrail:PutEventSelectors`
+- `s3:CreateBucket` (for CloudTrail S3 bucket, if not pre-created)
+
+### GitHub Live Mode
+
+Requires:
+- `GITHUB_TOKEN` (PAT with `repo` and `admin:repo_hook` scopes)
+- `GITHUB_OWNER`
+- `GITHUB_REPO`
 
 ## API Endpoints
 
@@ -91,8 +129,6 @@ The API will be available at `http://localhost:3000`.
 
 ## Autonomous Remediation
 
-Unlike every major competitor (Vanta, Drata, Secureframe), this agent **does not just detect** — it **fixes**.
-
 ### How It Works
 
 1. **Evaluate** — Run the audit to detect non-compliant controls
@@ -104,17 +140,17 @@ Unlike every major competitor (Vanta, Drata, Secureframe), this agent **does not
 
 | Control | Issue | Auto-Fix Action |
 |---------|-------|-----------------|
-| **CC6.1** | IAM MFA disabled / weak password policy | Enable root MFA; enforce 14-char password with symbols & 90-day rotation |
-| **CC7.2** | CloudTrail logging disabled | Create multi-region trail with log file validation |
-| **CC6.8** | Branch protection disabled | Enforce PR reviews (2 approvers), code owner review, CI status checks |
+| **CC6.1** | IAM MFA disabled / weak password policy | Enforces 14-char password with symbols & 90-day rotation. Logs warning for root MFA (requires console). |
+| **CC7.2** | CloudTrail logging disabled | Creates multi-region trail with log file validation; starts logging. |
+| **CC6.8** | Branch protection disabled | Enforces PR reviews (2 approvers), code owner review, CI status checks. |
 
 ### CLI Usage
 
 ```bash
-# Detect only
+# Detection only
 npx tsx src/index.ts
 
-# Detect + fix
+# Detection + auto-fix
 npx tsx src/index.ts --remediate
 ```
 
@@ -156,10 +192,10 @@ remediator.registerRemediation('CC6.1', async (control, evaluation) => {
 ├── src/
 │   ├── adapters/
 │   │   ├── base.adapter.ts         # Abstract adapter interface
-│   │   ├── aws.adapter.ts          # AWS Security Hub / CloudTrail
-│   │   ├── aws.remediator.ts       # AWS auto-fix logic
-│   │   ├── github.adapter.ts       # GitHub branch protection
-│   │   ├── github.remediator.ts    # GitHub auto-fix logic
+│   │   ├── aws.adapter.ts          # AWS SDK evidence collection
+│   │   ├── aws.remediator.ts       # AWS SDK auto-fix logic
+│   │   ├── github.adapter.ts       # GitHub API evidence collection
+│   │   ├── github.remediator.ts    # GitHub API auto-fix logic
 │   │   └── slack.adapter.ts        # Slack notifications
 │   ├── agents/
 │   │   └── audit.agent.ts          # Audit orchestrator
@@ -189,24 +225,35 @@ remediator.registerRemediation('CC6.1', async (control, evaluation) => {
 
 ## Adapters
 
-### AWS Adapter
+### AWS Adapter (LIVE / MOCK)
+- **LIVE mode:** Uses `@aws-sdk/client-iam` and `@aws-sdk/client-cloudtrail` to query real infrastructure
+- **MOCK mode:** Returns simulated compliant data for testing
+
 Collects evidence from:
-- **AWS Security Hub** — IAM MFA, password policies (CC6.1)
-- **AWS CloudTrail** — Audit trail logging status (CC7.2)
+- **AWS IAM** — Password policy strength, MFA status (CC6.1)
+- **AWS CloudTrail** — Trail existence, logging status, multi-region config (CC7.2)
 
-### AWS Remediator
-Automatically fixes:
-- **IAM MFA** — Enables MFA for root user
-- **Password Policy** — Enforces strong password requirements
-- **CloudTrail** — Creates and enables multi-region audit trail
+### AWS Remediator (LIVE / MOCK)
+- **LIVE mode:** Calls AWS APIs to enforce compliance
+- **MOCK mode:** Logs simulated actions
 
-### GitHub Adapter
+Fixes:
+- **Password Policy** — Enforces 14+ chars, symbols, 90-day rotation
+- **CloudTrail** — Creates/starts multi-region trail with log validation
+
+### GitHub Adapter (LIVE / MOCK)
+- **LIVE mode:** Uses GitHub REST API via native `fetch`
+- **MOCK mode:** Returns simulated branch protection data
+
 Collects evidence from:
-- **Branch Protection** — Required PR reviews, status checks (CC6.8)
+- **Branch Protection API** — Required PR reviews, status checks, admin enforcement (CC6.8)
 
-### GitHub Remediator
-Automatically fixes:
-- **Branch Protection** — Enforces required reviews, code owner approval, CI checks
+### GitHub Remediator (LIVE / MOCK)
+- **LIVE mode:** Calls GitHub API to enforce branch protection
+- **MOCK mode:** Logs simulated actions
+
+Fixes:
+- **Branch Protection** — Enforces 2 required reviews, code owner approval, CI checks
 
 ### Slack Adapter
 Sends notifications:
@@ -244,10 +291,10 @@ evaluator.registerRule('CC6.1', (evidence) => {
 - [x] Initial repo scaffolding & TS build settings
 - [x] Zod domain models & SOC 2 types
 - [x] Dynamic rule engine & policy evaluator
-- [x] **Autonomous remediation engine** — fixes non-compliant controls automatically
+- [x] Autonomous remediation engine
 - [x] Abstract adapter interface
-- [x] AWS CloudTrail / Security Hub adapter + remediator
-- [x] GitHub branch protection adapter + remediator
+- [x] AWS SDK adapter + remediator (LIVE + MOCK)
+- [x] GitHub API adapter + remediator (LIVE + MOCK)
 - [x] Autonomous agent runtime orchestrator
 - [x] PostgreSQL Prisma persistence schema
 - [x] Database service layer
