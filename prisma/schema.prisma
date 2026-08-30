@@ -1,0 +1,96 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum SOC2Category {
+  SECURITY
+  AVAILABILITY
+  PROCESSING_INTEGRITY
+  CONFIDENTIALITY
+  PRIVACY
+}
+
+enum PolicySeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFORMATIONAL
+}
+
+enum ComplianceStatus {
+  COMPLIANT
+  NON_COMPLIANT
+  NOT_EVALUATED
+  NOT_APPLICABLE
+  PARTIALLY_COMPLIANT
+}
+
+model Control {
+  id           String             @id
+  category     SOC2Category
+  title        String
+  description  String
+  tscReference String
+  severity     PolicySeverity
+  isAutomated  Boolean            @default(true)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  evaluations  EvaluationResult[]
+  evidence     Evidence[]
+
+  @@map("controls")
+}
+
+model AuditRun {
+  id                String             @id @default(uuid())
+  timestamp         DateTime           @default(now())
+  totalControls     Int
+  compliantCount    Int
+  nonCompliantCount Int
+  notEvaluatedCount Int
+
+  results           EvaluationResult[]
+
+  @@map("audit_runs")
+}
+
+model Evidence {
+  id            String            @id @default(uuid())
+  controlId     String
+  sourceAdapter String
+  timestamp     DateTime          @default(now())
+  rawPayload    Json
+  resourceArn   String?
+
+  control       Control           @relation(fields: [controlId], references: [id], onDelete: Cascade)
+  evaluations   EvaluationResult[] @relation("EvaluationToEvidence")
+
+  @@index([controlId])
+  @@index([sourceAdapter])
+  @@map("evidence")
+}
+
+model EvaluationResult {
+  id               String           @id @default(uuid())
+  auditRunId       String
+  controlId        String
+  status           ComplianceStatus
+  evaluatedAt      DateTime         @default(now())
+  findings         String[]
+  remediationSteps String[]
+
+  auditRun         AuditRun         @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+  control          Control          @relation(fields: [controlId], references: [id], onDelete: Cascade)
+  evidenceList     Evidence[]       @relation("EvaluationToEvidence")
+
+  @@index([auditRunId])
+  @@index([controlId])
+  @@map("evaluation_results")
+}
