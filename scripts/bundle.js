@@ -4,15 +4,18 @@ const path = require('path');
 const FILES_TO_BUNDLE = [
   'package.json',
   'tsconfig.json',
+  '.env.example',
   'prisma/schema.prisma',
   'src/types/policy.ts',
   'src/policies/evaluator.ts',
   'src/adapters/base.adapter.ts',
   'src/adapters/aws.adapter.ts',
   'src/adapters/github.adapter.ts',
+  'src/adapters/slack.adapter.ts',
   'src/agents/audit.agent.ts',
   'src/core/db.ts',
   'src/index.ts',
+  'src/server.ts',
 ];
 
 const OUTPUT_FILE = 'bundle.md';
@@ -26,6 +29,8 @@ function generateBundle() {
     if (fs.existsSync(fullPath)) {
       const fileData = fs.readFileSync(fullPath, 'utf8');
       content += `---\n\n## File: \`${relativePath}\`\n\n\`\`\`\n${fileData}\n\`\`\`\n\n`;
+    } else {
+      console.log(`[!] File not found: ${relativePath}`);
     }
   }
 
