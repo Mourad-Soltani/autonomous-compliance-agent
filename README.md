@@ -1,11 +1,13 @@
 # 🤖 Autonomous Compliance Agent
 
-> Multi-cloud SOC 2 compliance automation platform with autonomous remediation, policy templates, evidence export, CIS benchmarks, and an auditor-ready web portal.
+> Multi-cloud SOC 2 compliance automation platform with autonomous remediation, policy templates, evidence export, CIS benchmarks, Kubernetes scanning, and an auditor-ready web portal.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)](https://www.typescriptlang.org/)
 [![Prisma](https://img.shields.io/badge/Prisma-ORM-2D3748)](https://www.prisma.io/)
 [![SOC 2](https://img.shields.io/badge/SOC%202-Trust%20Service%20Categories-green)](https://www.aicpa.org/interestareas/frc/assuranceadvisoryservices/aicpasoc2report.html)
 [![CIS](https://img.shields.io/badge/CIS-Benchmarks-orange)](https://www.cisecurity.org/cis-benchmarks)
+[![K8s](https://img.shields.io/badge/Kubernetes-Ready-326CE5)](https://kubernetes.io/)
+[![Terraform](https://img.shields.io/badge/Terraform-Provider-7B42BC)](https://www.terraform.io/)
 
 ---
 
@@ -16,14 +18,19 @@
 | **Policy Template Library** | ✅ LIVE | 25 pre-built SOC 2 controls across all 5 Trust Service Categories |
 | **CIS Benchmarks** | ✅ LIVE | 45 CIS controls mapped to SOC 2 (AWS, Azure, GCP) |
 | **Custom Control Builder** | ✅ LIVE | No-code UI for creating custom compliance controls |
-| **Multi-Cloud Adapters** | ✅ LIVE | AWS, Azure, GCP, GitHub |
+| **Multi-Cloud Adapters** | ✅ LIVE | AWS, Azure, GCP, GitHub, Kubernetes |
 | **Autonomous Remediation** | ✅ LIVE | Auto-fix violations with rollback support |
 | **Evidence Export** | ✅ LIVE | CSV, JSON, Markdown, HTML auditor reports |
 | **Auditor Portal** | ✅ LIVE | Print-ready HTML dashboard for external auditors |
-| **Web Dashboard** | ✅ LIVE | Dark-themed React dashboard for real-time monitoring |
-| **REST API** | ✅ LIVE | Full CRUD + trigger endpoints |
+| **Web Dashboard** | ✅ LIVE | Dark-themed React dashboard with auth |
+| **REST API** | ✅ LIVE | Full CRUD + trigger endpoints with JWT/API key auth |
+| **Auth & SSO** | ✅ LIVE | JWT sessions, API keys, RBAC, SSO-ready (OIDC) |
 | **Notifications** | ✅ LIVE | Slack + generic webhook alerts |
 | **Zero-Dependency Bundle** | ✅ LIVE | Single-file deploy script |
+| **Docker Deployment** | ✅ LIVE | Multi-stage Dockerfile + Compose stack |
+| **Kubernetes Native** | ✅ LIVE | K8s manifests + HPA + Ingress |
+| **CI/CD Pipeline** | ✅ LIVE | GitHub Actions 7-stage pipeline |
+| **Terraform Provider** | ✅ LIVE | Compliance-as-Code with 2 resources + 2 data sources |
 
 ---
 
@@ -39,7 +46,9 @@
 │   │   ├── azure.adapter.ts
 │   │   ├── azure.remediator.ts
 │   │   ├── gcp.adapter.ts
-│   │   └── gcp.remediator.ts
+│   │   ├── gcp.remediator.ts
+│   │   ├── k8s.adapter.ts
+│   │   └── k8s.remediator.ts
 │   ├── api/                # REST API routes & middleware
 │   │   ├── routes/
 │   │   │   ├── audit.routes.ts
@@ -47,8 +56,11 @@
 │   │   │   ├── template.routes.ts
 │   │   │   ├── export.routes.ts
 │   │   │   ├── adapter.routes.ts
-│   │   │   └── custom-control.routes.ts
+│   │   │   ├── custom-control.routes.ts
+│   │   │   └── auth.routes.ts
 │   │   └── middleware/
+│   │       ├── auth.middleware.ts
+│   │       └── error-handler.ts
 │   ├── core/               # Rule engine, evaluator, export
 │   │   ├── rule-engine.ts
 │   │   ├── policy-evaluator.ts
@@ -60,9 +72,13 @@
 │   │   │   ├── AuditRuns.tsx
 │   │   │   ├── Controls.tsx
 │   │   │   ├── AuditorPortal.tsx
-│   │   │   └── CustomControlBuilder.tsx
+│   │   │   ├── CustomControlBuilder.tsx
+│   │   │   ├── LoginPage.tsx
+│   │   │   └── ApiKeysPage.tsx
 │   │   └── components/
 │   ├── db/                 # Prisma schema + service layer
+│   ├── services/           # Business logic
+│   │   └── auth.service.ts
 │   ├── models/             # Zod domain models
 │   ├── notifications/      # Slack & webhook adapters
 │   ├── templates/          # SOC 2 + CIS control templates
@@ -73,10 +89,43 @@
 │   ├── cli/                # CLI commands
 │   └── index.ts            # Entry point
 ├── scripts/
-│   └── bundle.js           # Zero-dependency bundler
+│   ├── bundle.js           # Zero-dependency bundler
+│   └── seed-demo.ts        # Demo data seeder
+├── docs/
+│   ├── DEPLOYMENT.md       # Deployment guide
+│   ├── API.md              # API reference
+│   ├── ARCHITECTURE.md     # System architecture
+│   └── server-auth-integration.ts
+├── k8s/                    # Kubernetes manifests
+│   ├── namespace.yaml
+│   ├── configmap.yaml
+│   ├── secret.yaml
+│   ├── postgres.yaml
+│   ├── redis.yaml
+│   ├── app.yaml
+│   ├── hpa.yaml
+│   ├── ingress.yaml
+│   ├── rbac.yaml
+│   └── kustomization.yaml
+├── terraform-provider-aca/ # Terraform provider
+│   ├── provider.go
+│   ├── resource_control.go
+│   ├── resource_audit_run.go
+│   ├── datasource_finding.go
+│   ├── datasource_template.go
+│   ├── examples/
+│   └── README.md
+├── nginx/
+│   └── nginx.conf
 ├── prisma/
 │   └── schema.prisma
+├── .github/workflows/
+│   └── ci-cd.yml
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
 ├── .env.example
+├── LICENSE
 └── README.md
 ```
 
@@ -148,14 +197,31 @@ npm start          # Production
 - **CC6.1** — Branch protection rules, required reviews
 - **CC7.2** — Secret scanning & dependency alerts
 
+### Kubernetes
+- **CC6.1** — RBAC over-permissive bindings, wildcard ClusterRoles
+- **CC6.6** — Default service account tokens, secrets in default namespace
+- **CC6.7** — Missing NetworkPolicies, overly permissive ingress rules
+- **CC7.2** — Privileged containers, root execution, hostNetwork/PID/IPC, missing capability drops
+- **A1.1** — Outdated kubelet versions, node health
+
 ---
 
 ## 📊 API Endpoints
 
+### Auth
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/auth/register` | Create account |
+| `POST` | `/auth/login` | Sign in |
+| `GET`  | `/auth/me` | Current user |
+| `GET`  | `/auth/api-keys` | List API keys |
+| `POST` | `/auth/api-keys` | Create API key |
+| `DELETE` | `/auth/api-keys/:id` | Revoke API key |
+
 ### Audit Runs
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/audit/run` | Trigger new compliance scan |
+| `POST` | `/audit/run` | Trigger compliance scan |
 | `GET`  | `/audit/runs` | List all audit runs |
 | `GET`  | `/audit/runs/:id` | Get audit run details |
 | `GET`  | `/audit/runs/:id/export?format=csv` | Export CSV report |
@@ -216,13 +282,35 @@ node scripts/bundle.js
 
 ---
 
-## 📦 Zero-Dependency Bundle
+## 📦 Deployment Options
 
-Deploy anywhere with a single file:
-
+### Docker Compose
 ```bash
-node scripts/bundle.js
-# Outputs: dist/bundle.ts
+docker-compose up -d
+```
+
+### Kubernetes
+```bash
+kubectl apply -k k8s/
+```
+
+### Terraform
+```hcl
+provider "aca" {
+  host    = "https://aca.example.com"
+  api_key = var.aca_api_key
+}
+
+resource "aca_control" "example" {
+  id           = "CUSTOM-SEC-001"
+  title        = "Custom WAF Check"
+  category     = "SECURITY"
+  soc2_mapping = "CC6.7"
+  severity     = "high"
+  adapter      = "aws"
+  check_config = file("check.js")
+  automated    = true
+}
 ```
 
 ---
@@ -238,6 +326,7 @@ node scripts/bundle.js
 - [x] GitHub API adapter + remediator (LIVE + MOCK)
 - [x] Azure SDK adapter + remediator (LIVE + MOCK)
 - [x] GCP SDK adapter + remediator (LIVE + MOCK)
+- [x] Kubernetes adapter + remediator (LIVE + MOCK)
 - [x] Autonomous agent runtime orchestrator
 - [x] PostgreSQL Prisma persistence schema
 - [x] Database service layer
@@ -250,8 +339,13 @@ node scripts/bundle.js
 - [x] Evidence export / auditor portal
 - [x] CIS Benchmarks integration (45 controls)
 - [x] Custom control builder UI
-- [ ] Kubernetes / Container adapter (future)
-- [ ] Compliance-as-Code Terraform provider (future)
+- [x] Authentication & Authorization (JWT, API keys, RBAC)
+- [x] Docker deployment
+- [x] Kubernetes deployment
+- [x] CI/CD pipeline
+- [x] Terraform provider
+- [ ] Container image scanning (Trivy/Grype integration)
+- [ ] Compliance-as-Code policy packs (OPA/Rego)
 
 ---
 
@@ -259,9 +353,9 @@ node scripts/bundle.js
 
 | Metric | Value |
 |--------|-------|
-| One-time codebase sale | $40,000 – $80,000 |
-| SaaS launch price | $999 – $2,499 / month |
-| Status | Enterprise multi-cloud compliance platform with CIS benchmarks, custom controls, and full audit lifecycle |
+| One-time codebase sale | $80,000 – $150,000 |
+| SaaS launch price | $999 – $2,999 / month |
+| Status | Enterprise multi-cloud compliance platform with K8s, Terraform, and full audit lifecycle |
 
 ---
 
