@@ -5,6 +5,7 @@ const FILES_TO_BUNDLE = [
   'package.json',
   'tsconfig.json',
   '.env.example',
+  'README.md',
   'prisma/schema.prisma',
   'src/types/policy.ts',
   'src/policies/evaluator.ts',
