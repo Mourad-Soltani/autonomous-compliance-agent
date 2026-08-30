@@ -298,6 +298,36 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       return;
     }
 
+
+    // GET /templates — list all available control templates
+    if (url.pathname === '/templates' && req.method === 'GET') {
+      const { listTemplates, getTemplateStats } = await import('./templates/loader.js');
+      const templates = listTemplates();
+      const stats = getTemplateStats();
+      json(res, 200, { stats, templates });
+      return;
+    }
+
+    // POST /templates/seed — seed database with templates
+    if (url.pathname === '/templates/seed' && req.method === 'POST') {
+      const { seedTemplates } = await import('./templates/loader.js');
+      const category = url.searchParams.get('category') as any;
+      const automatedOnly = url.searchParams.get('automatedOnly') === 'true';
+      const manualOnly = url.searchParams.get('manualOnly') === 'true';
+
+      const result = await seedTemplates({
+        category: category || 'ALL',
+        automatedOnly,
+        manualOnly,
+      });
+      json(res, 200, {
+        message: `Seeded ${result.seeded} controls`,
+        seeded: result.seeded,
+        controls: result.controls.map(c => ({ id: c.id, title: c.title, category: c.category })),
+      });
+      return;
+    }
+
     // 404 fallback
     json(res, 404, { error: 'Not found', path: url.pathname, method: req.method });
   } catch (err) {
@@ -310,14 +340,17 @@ server.listen(PORT, async () => {
   console.log(`[+] Compliance Agent API running on http://localhost:${PORT}`);
   console.log(`[+] Dashboard available at http://localhost:${PORT}/dashboard`);
   console.log(`[+] Endpoints:`);
-  console.log(`    GET  /health          → Health check`);
-  console.log(`    POST /audit           → Trigger compliance audit`);
-  console.log(`    POST /remediate       → Trigger audit + auto-fix`);
-  console.log(`    GET  /audit/runs      → List audit runs`);
-  console.log(`    GET  /audit/runs/:id  → Get specific audit run`);
-  console.log(`    GET  /controls        → List SOC 2 controls`);
-  console.log(`    GET  /controls/:id    → Get specific control`);
-  console.log(`    GET  /evidence        → List collected evidence`);
+  console.log(`    GET  /                    → Web Dashboard`);
+  console.log(`    GET  /health              → Health check`);
+  console.log(`    POST /audit               → Trigger compliance audit`);
+  console.log(`    POST /remediate           → Trigger audit + auto-fix`);
+  console.log(`    GET  /audit/runs          → List audit runs`);
+  console.log(`    GET  /audit/runs/:id      → Get specific audit run`);
+  console.log(`    GET  /controls            → List SOC 2 controls`);
+  console.log(`    GET  /controls/:id        → Get specific control`);
+  console.log(`    GET  /evidence            → List collected evidence`);
+  console.log(`    GET  /templates           → List control templates`);
+  console.log(`    POST /templates/seed      → Seed database with templates`);
 });
 
 process.on('SIGINT', async () => {
